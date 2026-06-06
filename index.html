@@ -5807,6 +5807,24 @@ async function _handleInputInner(raw){
   }
 
   // ══ SYSTEM COMMANDS — checked before anything else ══
+  // ── LOC DEBUG — must be before intent detection ──
+  if(/^(loc debug|debug loc|location debug|loc info)$/i.test(raw.trim())){
+    const vdbg=document.getElementById('vdbg');
+    if(vdbg){vdbg.style.display='block';if(typeof initVoiceDebug==='function')initVoiceDebug();}
+    const _locInfo=[
+      'LOC STATE: '+_locState,
+      'TOKEN: '+(ONEMAP_TOKEN?ONEMAP_TOKEN.slice(0,25)+'... ('+ONEMAP_TOKEN.length+' chars)':'EMPTY ⚠'),
+      'LOC DATA: '+(_locData?JSON.stringify(_locData).slice(0,120):'none'),
+      'IS MOBILE: '+_IS_MOBILE_LOC,
+      'GPS supported: '+(!!navigator.geolocation),
+    ].join('\n');
+    harveyMsg('<pre style="font-family:var(--mono);font-size:9px;color:var(--c);white-space:pre-wrap">'+_locInfo+'</pre>Voice debug panel open — LOC logs appear there after tapping 📍 LOC.',[
+      {label:'📍 TEST LOC',val:'__loc_start__'},
+      {label:'CLOSE DEBUG',val:'close debug'},
+    ]);
+    loading=false;sbEl.disabled=false;return;
+  }
+
   if(/^use whisper$|^whisper mode$|^better voice$|^upgrade voice$/i.test(raw.trim())){
     if(!_wReady&&!_wLoading){
       harveyMsg('Loading Whisper voice engine, sir. First time takes about 30 seconds.',[{label:'CANCEL',val:'__restart__'}]);
@@ -5984,24 +6002,6 @@ async function _handleInputInner(raw){
   }
   if(raw==='close debug'){
     const vdbg=document.getElementById('vdbg');if(vdbg)vdbg.style.display='none';
-    loading=false;sbEl.disabled=false;return;
-  }
-
-  // LOC debug — shows location state and opens voice debug panel
-  if(raw==='loc debug'||raw==='debug loc'||raw==='location debug'){
-    const vdbg=document.getElementById('vdbg');
-    if(vdbg){vdbg.style.display='block';if(typeof initVoiceDebug==='function')initVoiceDebug();}
-    const _locInfo=[
-      'LOC STATE: '+_locState,
-      'TOKEN: '+(ONEMAP_TOKEN?ONEMAP_TOKEN.slice(0,25)+'... ('+ONEMAP_TOKEN.length+' chars)':'EMPTY ⚠'),
-      'LOC DATA: '+(  _locData?JSON.stringify(_locData).slice(0,120):'none'),
-      'IS MOBILE: '+_IS_MOBILE_LOC,
-      'GPS supported: '+(!!navigator.geolocation),
-    ].join('\n');
-    harveyMsg('<pre style="font-family:var(--mono);font-size:9px;color:var(--c);white-space:pre-wrap">'+_locInfo+'</pre>\nVoice debug panel opened below — LOC logs shown there.',[
-      {label:'📍 TEST LOC',val:'__loc_start__'},
-      {label:'CLOSE DEBUG',val:'close debug'},
-    ]);
     loading=false;sbEl.disabled=false;return;
   }
 
