@@ -15422,14 +15422,14 @@ function safeStart(){
 
 async function _locReverseGeocode(lat,lng){
   try{
-    const url=`https://www.onemap.gov.sg/api/public/revgeocode?location=${lat},${lng}&token=${ONEMAP_TOKEN}&buffer=40&addressType=HDB&otherFeatures=N`;
+    const url=`https://developers.onemap.sg/privateapi/commonsvc/revgeocode?token=${ONEMAP_TOKEN}&location=${lat},${lng}&buffer=40&addressType=HDB&otherFeatures=N`;
     const resp=await fetch(url,{signal:AbortSignal.timeout(8000)});
     if(!resp.ok)throw new Error('OneMap '+resp.status);
     const data=await resp.json();
     const results=data.GeocodeInfo||[];
     if(!results.length)return null;
     const r=results[0];
-    return {block:(r.BLOCK||'').trim(),street:(r.ROAD||'').trim().toUpperCase(),postal:r.POSTALCODE||'',lat,lng,source:'onemap'};
+    return {block:(r.BLOCK||r.BLK_NO||'').trim(),street:(r.ROAD||r.ROAD_NAME||'').trim().toUpperCase(),postal:(r.POSTALCODE||r.POSTAL||'').trim(),lat,lng,source:'onemap'};
   }catch(e){vdbgLog('OneMap revgeo failed: '+e.message,'var(--r)');return null;}
 }
 function _locSetState(state){
@@ -15484,8 +15484,11 @@ async function _locTap(){
       const geo=await _locReverseGeocode(lat,lng);
       if(!geo||!geo.street){
         _locSetState('failed');
-        harveyMsg('Coordinates acquired but street address could not be resolved, sir. Try again.',[{label:'📍 TRY AGAIN',val:'__loc_start__'}]);
-        speak('Could not resolve your address, sir.');
+        const _noGeoMsg=!ONEMAP_TOKEN?
+          'Location service unavailable, sir — OneMap token not loaded. Please run the token refresh script and reload the page.':
+          'Coordinates acquired but street address could not be resolved, sir. You may be in an area with no HDB blocks nearby. Try again outdoors.';
+        harveyMsg(_noGeoMsg,[{label:'📍 TRY AGAIN',val:'__loc_start__'},{label:'↺ RELOAD',val:'__reload__'}]);
+        speak(!ONEMAP_TOKEN?'Location service unavailable, sir.':'Could not resolve your address, sir.');
         mode='menu';loading=false;sbEl.disabled=false;return;
       }
       const _street=geo.street,_block=geo.block||'';
