@@ -880,7 +880,7 @@ let _iosWMediaRec=null,_iosWChunks=[],_iosWStream=null;
 let _iosWVADTimer=null,_iosWAnalyser=null,_iosWCtx=null;
 
 // ── Location Mode ──
-const _IS_MOBILE_LOC=_IS_IOS_DEV||_IS_ANDROID_PHONE||/Tablet|iPad/i.test(navigator.userAgent);
+const _IS_MOBILE_LOC=_IS_IOS_DEV||_IS_ANDROID_PHONE||/Tablet|iPad|iPod|iPhone/i.test(navigator.userAgent)||('ontouchstart' in window);
 const ONEMAP_TOKEN='__ONEMAP_TOKEN__';
 let _locState='idle';
 let _locGeoWatcher=null;
@@ -15730,6 +15730,11 @@ function mobSearch(){
 
 
 window.addEventListener('load',async()=>{
+  // Show LOC button on mobile devices only
+  if(_IS_MOBILE_LOC){
+    const _lb=document.getElementById('mbtn-loc');
+    if(_lb){_lb.style.display='';_lb.style.removeProperty('display');}
+  }
   setTimeout(()=>{
     document.getElementById('welcome')?.remove();
     const boot=document.createElement('div');boot.className='msg-ai';
