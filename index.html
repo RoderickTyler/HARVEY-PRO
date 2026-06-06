@@ -15439,14 +15439,16 @@ function safeStart(){
 }
 
 async function _locReverseGeocode(lat,lng){
-  // Debug — visible in Harvey debug panel (tap version number)
   vdbgLog('LOC REV: lat='+lat.toFixed(5)+' lng='+lng.toFixed(5),'var(--c)');
-  vdbgLog('LOC REV: token='+( ONEMAP_TOKEN?ONEMAP_TOKEN.slice(0,15)+'...':'EMPTY ⚠'),'var(--c)');
-  if(!ONEMAP_TOKEN){vdbgLog('LOC REV: no token — aborting','var(--r)');return null;}
+  vdbgLog('LOC REV: token='+(ONEMAP_TOKEN?ONEMAP_TOKEN.slice(0,15)+'...':'EMPTY'),'var(--c)');
+  if(!ONEMAP_TOKEN){vdbgLog('LOC REV: no token','var(--r)');return null;}
   try{
-    const url=`https://www.onemap.gov.sg/api/public/revgeocode?location=${lat},${lng}&token=${ONEMAP_TOKEN}&buffer=50&addressType=HDB&otherFeatures=N`;
+    const url=`https://www.onemap.gov.sg/api/public/revgeocode?location=${lat},${lng}&buffer=50&addressType=HDB&otherFeatures=N`;
     vdbgLog('LOC REV: fetching...','var(--c)');
-    const resp=await fetch(url,{signal:AbortSignal.timeout(10000)});
+    const resp=await fetch(url,{
+      signal:AbortSignal.timeout(10000),
+      headers:{'Authorization':ONEMAP_TOKEN}
+    });
     vdbgLog('LOC REV: HTTP '+resp.status,'var(--c)');
     if(!resp.ok){
       const txt=await resp.text().catch(()=>'');
