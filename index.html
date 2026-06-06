@@ -881,7 +881,8 @@ let _iosWVADTimer=null,_iosWAnalyser=null,_iosWCtx=null;
 
 // ── Location Mode ──
 const _IS_MOBILE_LOC=_IS_IOS_DEV||_IS_ANDROID_PHONE||/Tablet|iPad|iPod|iPhone/i.test(navigator.userAgent)||('ontouchstart' in window);
-const ONEMAP_TOKEN='__ONEMAP_TOKEN__';
+let ONEMAP_TOKEN=''; // fetched from Google Sheet api tab at load time
+const ONEMAP_TOKEN_SHEET_URL=`https://docs.google.com/spreadsheets/d/1yIiqAYwkUzDkaoCBIkYdNhIu9fGZltb0UmgP7QRsZOw/gviz/tq?tqx=out:csv&sheet=api`;
 let _locState='idle';
 let _locGeoWatcher=null;
 let _locData=null;
@@ -1728,6 +1729,32 @@ async function loadData(){
     })();
     // Build street→town lookup index (one-time — no repeated resale scans after this)
     _buildStreetTownIndex();
+
+    // ── Fetch OneMap token from Google Sheet api tab ──
+    try{
+      const _tResp=await fetch(ONEMAP_TOKEN_SHEET_URL);
+      if(_tResp.ok){
+        const _tCsv=await _tResp.text();
+        // CSV format: key,value,updated_at — find onemap_token row
+        const _tLines=_tCsv.split('\n');
+        for(const _tLine of _tLines){
+          const _tCols=_tLine.split(',');
+          // Strip quotes from CSV values
+          const _tKey=(_tCols[0]||'').replace(/"/g,'').trim();
+          const _tVal=(_tCols[1]||'').replace(/"/g,'').trim();
+          if(_tKey==='onemap_token'&&_tVal.length>20){
+            ONEMAP_TOKEN=_tVal;
+            vdbgLog('OneMap token loaded from Sheet ('+_tVal.slice(0,20)+'...)','var(--g)');
+            break;
+          }
+        }
+        if(!ONEMAP_TOKEN) vdbgLog('OneMap token not found in api tab — location may not work','var(--a)');
+      } else {
+        vdbgLog('api tab fetch failed ('+_tResp.status+') — location unavailable','var(--r)');
+      }
+    }catch(_tErr){
+      vdbgLog('OneMap token fetch error: '+_tErr.message+' — location unavailable','var(--r)');
+    }
 
     document.getElementById('lat').textContent=(Date.now()-t0)+'ms';
     document.getElementById('txcount').textContent=DB.resale.length.toLocaleString();
@@ -15426,6 +15453,10 @@ function _locAbort(){
 async function _locTap(){
   if(_locState==='acquiring'){_locAbort();return;}
   if(!navigator.geolocation){harveyMsg('Geolocation is not supported on this browser, sir.');return;}
+  if(!ONEMAP_TOKEN){
+    harveyMsg('Location service is currently unavailable, sir. The OneMap token has not been loaded — please try reloading the page, or the token may need refreshing.');
+    return;
+  }
   _locSetState('acquiring');
   loading=true;sbEl.disabled=true;
   const _acqMsgs=[
