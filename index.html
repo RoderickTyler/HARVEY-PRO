@@ -6080,9 +6080,11 @@ async function _handleInputInner(raw){
   if(raw==='__loc_abort__'||/^(abort|cancel|stop)\s*(location|loc)?$/i.test(raw.trim())&&_locState==='acquiring'){_locAbort();return;}
   if(raw==='__loc_start__'){_locTap();return;}
   // Buffer adjustment chips
-  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_500__'){
+  // Buffer size — chip commands AND voice recognition (post-prompt)
+  const _bufVoiceMatch=raw.match(/^(?:try\s+|use\s+|set\s+(?:to\s+)?|radius\s+)?(50|100|200|500)\s*m(?:etres?|eters?)?$/i);
+  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_500__'||_bufVoiceMatch){
     const _bMap={'__loc_buf_50__':50,'__loc_buf_100__':100,'__loc_buf_200__':200,'__loc_buf_500__':500};
-    _locBuffer=_bMap[raw];
+    _locBuffer=_bufVoiceMatch?Number(_bufVoiceMatch[1]):_bMap[raw];
     harveyMsg('Search radius set to <strong>'+_locBuffer+'m</strong>, sir. Relocating...',[{label:'⊗ ABORT',val:'__loc_abort__'}]);
     speak('Radius set to '+_locBuffer+' metres. Relocating.');
     _locTap();loading=false;sbEl.disabled=false;return;
@@ -15571,15 +15573,7 @@ async function _locTap(){
       const lat=pos.coords.latitude,lng=pos.coords.longitude;
       vdbgLog('GPS: '+lat.toFixed(6)+','+lng.toFixed(6),'var(--g)');
       const geo=await _locReverseGeocode(lat,lng);
-      if(!geo||!geo.street){
-        _locSetState('failed');
-        const _noGeoMsg=!ONEMAP_TOKEN?
-          'Location service unavailable, sir — OneMap token not loaded. Please run the token refresh script and reload the page.':
-          'Coordinates acquired but street address could not be resolved, sir. You may be in an area with no HDB blocks nearby. Try again outdoors.';
-        harveyMsg(_noGeoMsg,[{label:'📍 TRY AGAIN',val:'__loc_start__'},{label:'↺ RELOAD',val:'__reload__'}]);
-        speak(!ONEMAP_TOKEN?'Location service unavailable, sir.':'Could not resolve your address, sir.');
-        mode='menu';loading=false;sbEl.disabled=false;return;
-      }
+
       // geo can be null, {none:true}, or full result object
       if(!geo){
         _locSetState('failed');
