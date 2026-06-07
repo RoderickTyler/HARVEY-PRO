@@ -5828,8 +5828,8 @@ async function _handleInputInner(raw){
 
   // ── LOC buffer + expand commands — before intent detection ──
   const _bufVoiceMatch=raw.match(/^(?:try\s+|use\s+|set\s+(?:to\s+)?|radius\s+)?(50|100|200|500)\s*m(?:etres?|eters?)?$/i);
-  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_500__'||raw==='__loc_buf_1000__'||raw==='__loc_buf_2000__'||_bufVoiceMatch){
-    const _bMap={'__loc_buf_50__':50,'__loc_buf_100__':100,'__loc_buf_200__':200,'__loc_buf_500__':500,'__loc_buf_1000__':1000,'__loc_buf_2000__':2000};
+  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_300__'||raw==='__loc_buf_400__'||raw==='__loc_buf_500__'||_bufVoiceMatch){
+    const _bMap={'__loc_buf_50__':50,'__loc_buf_100__':100,'__loc_buf_200__':200,'__loc_buf_300__':300,'__loc_buf_400__':400,'__loc_buf_500__':500};
     _locBuffer=_bufVoiceMatch?Number(_bufVoiceMatch[1]):(_bMap[raw]||_locBuffer);
     harveyMsg('Search radius set to <strong>'+_locBuffer+'m</strong>, sir. Relocating...',[{label:'⊗ ABORT',val:'__loc_abort__'}]);
     speak('Radius set to '+_locBuffer+' metres. Relocating.');
@@ -5842,10 +5842,12 @@ async function _handleInputInner(raw){
     loading=false;sbEl.disabled=false;return;
   }
   if(raw==='__EXPANDDIST__'){
-    harveyMsg('Extended radius mode, sir. Use with caution — larger buffers may return non-HDB addresses far from your position.',
-      [{label:'1 KM',val:'__loc_buf_1000__'},
-       {label:'2 KM',val:'__loc_buf_2000__'},
-       {label:'↩ BACK TO NORMAL',val:'__loc_adjust__'}]);
+    // OneMap API caps at 500m — 1km/2km not supported
+    harveyMsg('Extended radius, sir. Note: OneMap maximum is 500m — beyond that the API does not respond.',
+      [{label:'300m',val:'__loc_buf_300__'},
+       {label:'400m',val:'__loc_buf_400__'},
+       {label:'500m (MAX)',val:'__loc_buf_500__'},
+       {label:'↩ BACK',val:'__loc_adjust__'}]);
     loading=false;sbEl.disabled=false;return;
   }
 
@@ -15471,7 +15473,10 @@ async function _locReverseGeocode(lat,lng){
   if(!ONEMAP_TOKEN){vdbgLog('LOC REV: no token','var(--r)');return null;}
   try{
     // addressType=ALL — let OneMap return whatever is nearby, we handle HDB matching ourselves
-    const url=`https://www.onemap.gov.sg/api/public/revgeocode?location=${lat},${lng}&buffer=${_locBuffer}&addressType=ALL&otherFeatures=N`;
+    // OneMap max buffer is 500m — cap silently
+    const _safeBuf=Math.min(_locBuffer,500);
+    if(_safeBuf!==_locBuffer) vdbgLog('LOC REV: buffer capped at 500m (OneMap limit)','var(--a)');
+    const url=`https://www.onemap.gov.sg/api/public/revgeocode?location=${lat},${lng}&buffer=${_safeBuf}&addressType=ALL&otherFeatures=N`;
     vdbgLog('LOC REV: fetching...','var(--c)');
     // AbortSignal.timeout not supported on older iOS — use AbortController manually
     const _ac=new AbortController();
@@ -15508,24 +15513,57 @@ async function _locReverseGeocode(lat,lng){
     const _allStreets=[];
     const _allAddresses=[];
     results.forEach(r=>{
-      const _st=(r.ROAD||r.ROAD_NAME||'').trim().toUpperCase();
+      const _stRaw=(r.ROAD||r.ROAD_NAME||'').trim().toUpperCase();
+      // Normalise OneMap full street names to HDB abbreviated format
+      // e.g. "PASIR RIS DRIVE 4" → "PASIR RIS DR 4", "SEASTRAND" buildingname with no road → skip
+      const _st=_stRaw?contractStreetAbbr(_stRaw):'';
       const _blk=(r.BLOCK||r.BLK_NO||'').trim();
       const _bldg=(r.BUILDINGNAME||'').trim();
-      if(_st) _allStreets.push({street:_st,block:_blk,building:_bldg,postal:(r.POSTALCODE||'').trim()});
+      const _postal=(r.POSTALCODE||'').trim();
+      if(_st) _allStreets.push({street:_st,streetRaw:_stRaw,block:_blk,building:_bldg,postal:_postal});
+      // Human-readable label: use building name if block is condo (no HDB match expected)
       const _label=(_blk?'Blk '+_blk+' ':'')+(_st||_bldg||'unknown');
       if(_label&&!_allAddresses.includes(_label)) _allAddresses.push(_label);
+      vdbgLog('LOC REV: addr — "'+_stRaw+'" → "'+_st+'" blk='+_blk+' bldg='+_bldg+' postal='+_postal,'var(--c)');
     });
 
-    // Find HDB matches — check each street against HDB_PROP
+    // Also try postal lookup for each result — most reliable HDB identification
+    const _postalHits=[];
+    results.forEach(r=>{
+      const _p=(r.POSTALCODE||'').trim().replace(/[^0-9]/g,'');
+      if(_p.length===6){
+        const _pl=lookupPostal(_p);
+        if(_pl){
+          vdbgLog('LOC REV: postal hit — '+_p+' → Blk '+_pl.block+' '+_pl.street,'var(--g)');
+          _postalHits.push({street:_pl.street,block:_pl.block,postal:_p,hdbBlocks:getBlocksFromHDBProp(_pl.street,'')});
+        } else {
+          vdbgLog('LOC REV: postal '+_p+' not in HDB data (likely private)','var(--t3)');
+        }
+      }
+    });
+
+    // Find HDB matches — try postal first (most accurate), then street name
     const _hdbMatches=[];
-    const _seen=new Set();
+    const _seenStreets=new Set();
+
+    // Postal-based HDB matches
+    for(const _ph of _postalHits){
+      if(_ph.hdbBlocks&&_ph.hdbBlocks.length>0&&!_seenStreets.has(_ph.street)){
+        _seenStreets.add(_ph.street);
+        _hdbMatches.push({..._ph});
+        vdbgLog('LOC REV: HDB match (postal) — '+_ph.street+' blk '+_ph.block+' ('+_ph.hdbBlocks.length+' blocks on street)','var(--g)');
+      }
+    }
+
+    // Street-name based HDB matches (fallback)
+    const _seen=new Set(_seenStreets);
     for(const _a of _allStreets){
       if(!_a.street||_seen.has(_a.street)) continue;
       _seen.add(_a.street);
       const _hdbBlks=getBlocksFromHDBProp(_a.street,'');
       if(_hdbBlks&&_hdbBlks.length>0){
         _hdbMatches.push({..._a, hdbBlocks:_hdbBlks});
-        vdbgLog('LOC REV: HDB match — '+_a.street+' ('+_hdbBlks.length+' blocks)','var(--g)');
+        vdbgLog('LOC REV: HDB match (street) — '+_a.street+' ('+_hdbBlks.length+' blocks)','var(--g)');
       }
     }
 
@@ -15661,8 +15699,9 @@ async function _locTap(){
         }
         _noHdbMsg+='However, there are no HDB blocks within <strong>'+_bufM+'m</strong> of your location. You may not be near an HDB precinct.';
         const _noHdbChips=[
-          {label:'▲ TRY 200m',val:'__loc_buf_200__'},
-          {label:'▲ TRY 500m',val:'__loc_buf_500__'},
+          {label:'▲ 200m',val:'__loc_buf_200__'},
+          {label:'▲ 300m',val:'__loc_buf_300__'},
+          {label:'▲ 500m',val:'__loc_buf_500__'},
           {label:'📍 RE-LOCATE',val:'__loc_start__'},
           {label:'◎ ADJUST RADIUS',val:'__loc_adjust__'},
         ];
