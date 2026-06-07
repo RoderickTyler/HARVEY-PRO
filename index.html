@@ -5826,6 +5826,29 @@ async function _handleInputInner(raw){
     loading=false;sbEl.disabled=false;return;
   }
 
+  // ── LOC buffer + expand commands — before intent detection ──
+  const _bufVoiceMatch=raw.match(/^(?:try\s+|use\s+|set\s+(?:to\s+)?|radius\s+)?(50|100|200|500)\s*m(?:etres?|eters?)?$/i);
+  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_500__'||raw==='__loc_buf_1000__'||raw==='__loc_buf_2000__'||_bufVoiceMatch){
+    const _bMap={'__loc_buf_50__':50,'__loc_buf_100__':100,'__loc_buf_200__':200,'__loc_buf_500__':500,'__loc_buf_1000__':1000,'__loc_buf_2000__':2000};
+    _locBuffer=_bufVoiceMatch?Number(_bufVoiceMatch[1]):(_bMap[raw]||_locBuffer);
+    harveyMsg('Search radius set to <strong>'+_locBuffer+'m</strong>, sir. Relocating...',[{label:'⊗ ABORT',val:'__loc_abort__'}]);
+    speak('Radius set to '+_locBuffer+' metres. Relocating.');
+    _locTap();loading=false;sbEl.disabled=false;return;
+  }
+  if(raw==='__loc_adjust__'){
+    harveyMsg('Adjust search radius, sir — tap to change:',
+      [{label:'50m',val:'__loc_buf_50__'},{label:'100m',val:'__loc_buf_100__'},
+       {label:'200m',val:'__loc_buf_200__'},{label:'500m',val:'__loc_buf_500__'}]);
+    loading=false;sbEl.disabled=false;return;
+  }
+  if(raw==='__EXPANDDIST__'){
+    harveyMsg('Extended radius mode, sir. Use with caution — larger buffers may return non-HDB addresses far from your position.',
+      [{label:'1 KM',val:'__loc_buf_1000__'},
+       {label:'2 KM',val:'__loc_buf_2000__'},
+       {label:'↩ BACK TO NORMAL',val:'__loc_adjust__'}]);
+    loading=false;sbEl.disabled=false;return;
+  }
+
   if(/^use whisper$|^whisper mode$|^better voice$|^upgrade voice$/i.test(raw.trim())){
     if(!_wReady&&!_wLoading){
       harveyMsg('Loading Whisper voice engine, sir. First time takes about 30 seconds.',[{label:'CANCEL',val:'__restart__'}]);
@@ -6080,29 +6103,7 @@ async function _handleInputInner(raw){
   if(raw==='__loc_abort__'||/^(abort|cancel|stop)\s*(location|loc)?$/i.test(raw.trim())&&_locState==='acquiring'){_locAbort();return;}
   if(raw==='__loc_start__'){_locTap();return;}
   // Buffer adjustment chips
-  // Buffer size — chip commands AND voice recognition (post-prompt)
-  const _bufVoiceMatch=raw.match(/^(?:try\s+|use\s+|set\s+(?:to\s+)?|radius\s+)?(50|100|200|500)\s*m(?:etres?|eters?)?$/i);
-  if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_500__'||_bufVoiceMatch){
-    const _bMap={'__loc_buf_50__':50,'__loc_buf_100__':100,'__loc_buf_200__':200,'__loc_buf_500__':500,'__loc_buf_1000__':1000,'__loc_buf_2000__':2000};
-    _locBuffer=_bufVoiceMatch?Number(_bufVoiceMatch[1]):(_bMap[raw]||_locBuffer);
-    harveyMsg('Search radius set to <strong>'+_locBuffer+'m</strong>, sir. Relocating...',[{label:'⊗ ABORT',val:'__loc_abort__'}]);
-    speak('Radius set to '+_locBuffer+' metres. Relocating.');
-    _locTap();loading=false;sbEl.disabled=false;return;
-  }
-  if(raw==='__loc_adjust__'){
-    harveyMsg('Adjust search radius, sir — tap to change:',
-      [{label:'50m',val:'__loc_buf_50__'},{label:'100m',val:'__loc_buf_100__'},
-       {label:'200m',val:'__loc_buf_200__'},{label:'500m',val:'__loc_buf_500__'}]);
-    loading=false;sbEl.disabled=false;return;
-  }
-  // Hidden extended range command — only accessible via __EXPANDDIST__
-  if(raw==='__EXPANDDIST__'){
-    harveyMsg('Extended radius mode, sir. Use with caution — larger buffers may return non-HDB addresses far from your position.',
-      [{label:'1 KM',val:'__loc_buf_1000__'},
-       {label:'2 KM',val:'__loc_buf_2000__'},
-       {label:'↩ BACK TO NORMAL',val:'__loc_adjust__'}]);
-    loading=false;sbEl.disabled=false;return;
-  }
+
 
   if(/^(?:hdb\s*info|hdbinfo|property\s*info|block\s*info|hdb\s*data|hdb\s*property|show\s*hdb|__hdbinfo__)/i.test(raw.trim())){
     const _hiP=parseQuery(normalizeSpeech(raw.replace(/^(?:hdb\s*info|hdbinfo|property\s*info|block\s*info|hdb\s*data|hdb\s*property|show\s*hdb)\s*/i,'')));
