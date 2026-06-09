@@ -6550,9 +6550,9 @@ async function _handleInputInner(raw){
     const _locBlock=_locData?(_locData.block||''):null;
     const _locStreet=_locData?(_locData.street||''):null;
 
-    // CASE 1: loc fresh + HDB + any searched block → always ask user which to use
-    // Skip for private location — always use GPS directly
-    if(_LOC_FRESH&&!_locData.isPrivate&&_locStreet&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
+    // CASE 1: loc fresh + any searched block → always ask user which to use
+    // Works for both HDB and private locations
+    if(_LOC_FRESH&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
       harveyMsg(`Two locations in context, sir. Which would you like to use for the proximity search?`,[
         {label:'📍 MY LOCATION — '+(_locBlock?'Blk '+_locBlock+' ':'')+(_locStreet||'current GPS'),val:'__prox_use_loc__'},
         {label:'🔍 LAST SEARCHED — Blk '+_pb+' '+(_ps||''),val:'__prox_use_ctx__'}
