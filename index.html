@@ -4855,8 +4855,37 @@ function _locShowMap(lat,lng,hdbBlocks,street,_retry){
               .addTo(_locMap)
               .bindPopup('<span style="font-family:var(--mono);font-size:10px;color:#000">📍 You are here</span>');
 
-            // Note: block markers removed from location map to prevent fetch pile-up on iOS
-            // Use the PROXIMITY chip to see blocks on a dedicated map
+            // HDB block markers — tap to load block detail in Harvey
+            if(hdbBlocks&&hdbBlocks.length&&street){
+              hdbBlocks.forEach(blk=>{
+                // Use OneMap search to get coords for each block
+                fetch(`https://www.onemap.gov.sg/api/common/elastic/search?searchVal=BLK+${blk}+${encodeURIComponent(street)}&returnGeom=Y&getAddrDetails=Y&pageNum=1`,{
+                  headers:{'Authorization':ONEMAP_TOKEN}
+                })
+                .then(r=>r.ok?r.json():null)
+                .then(d=>{
+                  if(!d||!d.results||!d.results.length) return;
+                  const res=d.results[0];
+                  const bLat=parseFloat(res.LATITUDE);
+                  const bLng=parseFloat(res.LONGITUDE);
+                  if(isNaN(bLat)||isNaN(bLng)) return;
+                  const blkIcon=L.divIcon({
+                    html:'<div style="background:rgba(0,10,20,.85);border:1px solid var(--c);color:var(--c);font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:2px;white-space:nowrap;box-shadow:0 0 4px rgba(0,210,255,.3)">BLK '+blk+'</div>',
+                    className:'',iconAnchor:[20,10]
+                  });
+                  L.marker([bLat,bLng],{icon:blkIcon})
+                    .addTo(_locMap)
+                    .on('click',()=>{
+                      // Collapse map, trigger block detail via chat input
+                      mapDiv.style.display='none';
+                      toggle.textContent='🗺 SHOW MAP';
+                      if(_locMap){_locMap.remove();_locMap=null;}
+                      ciEl.value='block '+blk+' '+street;
+                      handleInput();
+                    });
+                }).catch(()=>{});
+              });
+            }
           }catch(e){vdbgLog('Map init error: '+e.message,'var(--r)');}
         },50);
       });
@@ -6535,8 +6564,12 @@ async function _handleInputInner(raw){
       const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locStreet;
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view from your location — <strong>${_dispAddr}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
       speak('Proximity map from your location, sir. Tap show map to expand.');
-      // Always use GPS lat/lng directly — no second OneMap lookup
-      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'',_pAnchorId),600);
+      // Use actual GPS coords directly — no second OneMap lookup needed
+      if(_locData.lat&&_locData.lng){
+        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'prox-anchor-'+Date.now().toString().slice(-6),_pAnchorId),600);
+      } else {
+        setTimeout(()=>_proxShowMap(_locBlock,_locStreet,_pAnchorId),600);
+      }
       loading=false;sbEl.disabled=false;return;
     }
 
@@ -6560,7 +6593,11 @@ async function _handleInputInner(raw){
       const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locData.street;
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations.</span>`);
       speak('Proximity from your location, sir.');
-      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locData.street,'',_pAnchorId),600);
+      if(_locData.lat&&_locData.lng){
+        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locData.street,'',_pAnchorId),600);
+      } else {
+        setTimeout(()=>_proxShowMap(_locData.block,_locData.street,_pAnchorId),600);
+      }
     }
     loading=false;sbEl.disabled=false;return;
   }
@@ -6572,6 +6609,28 @@ async function _handleInputInner(raw){
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity for Block <strong>${_pb2}</strong> on <strong>${_ps2}</strong>, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations.</span>`);
       speak('Proximity for Block '+_pb2+', sir.');
       setTimeout(()=>_proxShowMap(_pb2,_ps2,_pAnchorId),600);
+    }
+    loading=false;sbEl.disabled=false;return;
+  }
+
+  if(raw==='__prox_use_loc__'){
+    if(_locData&&_locData.street&&_locData.lat){
+      const _pAnchorId='prox-anchor-'+Date.now();
+      const _dispAddr=(_locData.block?'Blk '+_locData.block+' ':'')+_locData.street;
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>, sir.`);
+      speak('Proximity from your location, sir.');
+      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_locData.block||'',_locData.street,'',_pAnchorId),600);
+    }
+    loading=false;sbEl.disabled=false;return;
+  }
+  if(raw==='__prox_use_ctx__'){
+    const _pb3=workingCtx.blockCtx||convCtx.block||null;
+    const _ps3=workingCtx.streetCtx||convCtx.street||null;
+    if(_pb3&&_ps3){
+      const _pAnchorId='prox-anchor-'+Date.now();
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity for Block <strong>${_pb3}</strong> on <strong>${_ps3}</strong>, sir.`);
+      speak('Proximity for Block '+_pb3+', sir.');
+      setTimeout(()=>_proxShowMap(_pb3,_ps3,_pAnchorId),600);
     }
     loading=false;sbEl.disabled=false;return;
   }
@@ -16449,44 +16508,39 @@ async function _locTap(){
       if(_hdbM.length>0){
         // HDB blocks found nearby — happy path
         const _primary=_hdbM[0];
-        // Build show blocks first — needed before stamp
-        const _showBlks=_primary.block?
-          [_primary.block,..._primary.hdbBlocks.filter(b=>b!==_primary.block)].slice(0,6):
-          _primary.hdbBlocks.slice(0,6);
-
-        // Store location data with GPS coords + ts for proximity freshness
-        _locData={street:_primary.street,block:_primary.block||(_primary.hdbBlocks[0]||''),
-          blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
+        _locData={street:_primary.street,block:_primary.block,blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
         workingCtx.streetCtx=_primary.street;
         if(_primary.block) workingCtx.blockCtx=_primary.block;
-        // Stamp chip context for bare block number recognition (2min window)
+        // Stamp chip context — user can respond with bare block numbers for 2min
         _locChipCtx={street:_primary.street,blocks:_showBlks,ts:Date.now()};
-        // Show location map after chips render
+        // Show map after chips render
         setTimeout(()=>_locShowMap(geo.lat,geo.lng,_showBlks,_primary.street),900);
 
         let _locMsg='Location confirmed, sir.<br>';
         if(_allAddr.length) _locMsg+='Nearest address: <strong>'+_allAddr[0]+'</strong><br>';
         _locMsg+='HDB blocks nearby on <strong>'+_primary.street+'</strong>:';
-        if(_hdbM.length>1) _locMsg+=' (and '+(_hdbM.length-1)+' more street'+(_hdbM.length>2?'s':'')+')';
+        if(_hdbM.length>1) _locMsg+=' (and '+ (_hdbM.length-1)+' more street'+ (_hdbM.length>2?'s':'')+')';
 
         const _locChips=[];
+        // Show blocks from primary HDB street (up to 6)
+        const _showBlks=_primary.block?
+          [_primary.block,..._primary.hdbBlocks.filter(b=>b!==_primary.block)].slice(0,6):
+          _primary.hdbBlocks.slice(0,6);
         _showBlks.forEach(b=>_locChips.push({label:'BLK '+b,val:'block '+b+' '+_primary.street}));
+        // If multiple HDB streets found, offer the others
         if(_hdbM.length>1) _hdbM.slice(1,3).forEach(m=>
           _locChips.push({label:'🛣 '+m.street.split(' ').slice(0,3).join(' '),val:'block '+m.hdbBlocks[0]+' '+m.street}));
         _locChips.push({label:'ESTIMATE VALUATION',val:'estimate value block '+(_primary.block||_primary.hdbBlocks[0]||'')+' '+_primary.street});
         _locChips.push({label:'📍 RE-LOCATE',val:'__loc_start__'});
+        // Buffer adjust chips
         _locChips.push({label:'◎ ADJUST RADIUS',val:'__loc_adjust__'});
         _locChips.push({label:'🗺 PROXIMITY',val:'proximity'});
 
         harveyMsg(_locMsg,_locChips);
         speak('Location confirmed, sir. '+_primary.hdbBlocks.length+' HDB blocks nearby on '+_primary.street+'.');
-        mode='menu';loading=false;sbEl.disabled=false;
       } else {
         // OneMap returned addresses but none are HDB streets
-        // Store GPS coords even for non-HDB — needed for proximity
-        _locData={street:_allStreets[0]?_allStreets[0].street:'',
-          block:_allStreets[0]?_allStreets[0].block:'',
-          lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
+        _locData=null;
         let _noHdbMsg='Location acquired, sir.<br>';
         if(_allAddr.length){
           _noHdbMsg+='Nearest address: <strong>'+_allAddr.slice(0,3).join('</strong>, <strong>')+'</strong><br>';
