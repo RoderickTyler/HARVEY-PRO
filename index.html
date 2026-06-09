@@ -6543,6 +6543,8 @@ async function _handleInputInner(raw){
   if(/^(proximity|proximity search|proximity details|nearby|whats nearby|show map|4km|4 km)$/i.test(raw.trim())){
     _proxAwaitingLoc=0;
     const _LOC_FRESH=_locData&&_locData.ts&&(Date.now()-_locData.ts)<300000; // 5 min
+    vdbgLog('PROX: _locData='+JSON.stringify(_locData?{lat:_locData.lat,lng:_locData.lng,street:_locData.street,block:_locData.block,ts:_locData.ts,isPrivate:_locData.isPrivate}:null),'var(--c)');
+    vdbgLog('PROX: _LOC_FRESH='+_LOC_FRESH+' _pb='+workingCtx.blockCtx+' _ps='+workingCtx.streetCtx,'var(--c)');
     const _pb=workingCtx.blockCtx||convCtx.block||null;
     const _ps=workingCtx.streetCtx||convCtx.street||null;
     const _locBlock=_locData?(_locData.block||''):null;
@@ -6550,7 +6552,8 @@ async function _handleInputInner(raw){
 
     // CASE 1: loc fresh AND confirmed HDB location AND different block searched → ask user
     // Skip entirely if private location — always use GPS directly
-    if(_LOC_FRESH&&!_locData.isPrivate&&_locStreet&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
+    const _SEARCH_FRESH=workingCtx.searchTs&&(Date.now()-workingCtx.searchTs)<300000;
+    if(_LOC_FRESH&&!_locData.isPrivate&&_locStreet&&_pb&&_ps&&_SEARCH_FRESH&&(_locBlock!==_pb||_locStreet!==_ps)){
       harveyMsg(`Two locations in context, sir. Which would you like to use for the proximity search?`,[
         {label:'📍 MY LOCATION — '+(_locBlock?'Blk '+_locBlock+' ':'')+(_locStreet||'current GPS'),val:'__prox_use_loc__'},
         {label:'🔍 LAST SEARCHED — Blk '+_pb+' '+(_ps||''),val:'__prox_use_ctx__'}
@@ -16082,6 +16085,7 @@ async function handleBlockDetail(block, street, town, ctx){
   // Save block context
   workingCtx.blockCtx=_b;
   if(_s) workingCtx.streetCtx=_s;
+  workingCtx.searchTs=Date.now(); // for proximity conflict window
   if(_t) workingCtx.townCtx=_t;
   convCtx.block=_b;
   if(_s) convCtx.street=_s;
@@ -16537,8 +16541,13 @@ async function _locTap(){
         harveyMsg(_locMsg,_locChips);
         speak('Location confirmed, sir. '+_primary.hdbBlocks.length+' HDB blocks nearby on '+_primary.street+'.');
       } else {
-        // OneMap returned addresses but none are HDB streets
-        _locData=null;
+        // OneMap returned addresses but none are HDB streets — store GPS for proximity
+        _locData={
+          street:(geo.bestStreet||(_allStreets[0]?_allStreets[0].street:'')),
+          block:(geo.bestBlock||(_allStreets[0]?_allStreets[0].block:'')),
+          lat:geo.lat,lng:geo.lng,source:geo.source,
+          ts:Date.now(),isPrivate:true
+        };
         let _noHdbMsg='Location acquired, sir.<br>';
         if(_allAddr.length){
           _noHdbMsg+='Nearest address: <strong>'+_allAddr.slice(0,3).join('</strong>, <strong>')+'</strong><br>';
