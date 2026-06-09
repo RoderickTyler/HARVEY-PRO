@@ -5253,11 +5253,26 @@ async function proxCheck(distId){
   if((!p2||(p2.length!==6))&&(!b2||!s2)){if(_res)_res.innerHTML='<span style="color:var(--r)">Location 2: enter a 6-digit postal, or both block and street.</span>';return;}
   const loc1=await _proxResolveAddress(p1,b1,s1);
   const loc2=await _proxResolveAddress(p2,b2,s2);
-  if(!loc1){if(_res)_res.innerHTML='<span style="color:var(--r)">Could not resolve Location 1. Please check the details.</span>';return;}
-  if(!loc2){if(_res)_res.innerHTML='<span style="color:var(--r)">Could not resolve Location 2. Please check the details.</span>';return;}
+  vdbgLog('DIST CHECK loc1: '+(loc1?JSON.stringify({lat:loc1.lat,lng:loc1.lng,label:loc1.label}):'null'),'var(--c)');
+  vdbgLog('DIST CHECK loc2: '+(loc2?JSON.stringify({lat:loc2.lat,lng:loc2.lng,label:loc2.label}):'null'),'var(--c)');
+  if(!loc1){if(_res)_res.innerHTML='<span style="color:var(--r)">Could not resolve Location 1 — try entering a 6-digit postal code instead.</span>';return;}
+  if(!loc2){if(_res)_res.innerHTML='<span style="color:var(--r)">Could not resolve Location 2 — try entering a 6-digit postal code instead.</span>';return;}
+  // Validate both coords are in Singapore
+  if(!(loc1.lat>1.1&&loc1.lat<1.5&&loc1.lng>103.5&&loc1.lng<104.1)){
+    if(_res)_res.innerHTML='<span style="color:var(--r)">Location 1 coordinates outside Singapore range (lat:'+loc1.lat.toFixed(4)+' lng:'+loc1.lng.toFixed(4)+'). Please use a postal code.</span>';return;
+  }
+  if(!(loc2.lat>1.1&&loc2.lat<1.5&&loc2.lng>103.5&&loc2.lng<104.1)){
+    if(_res)_res.innerHTML='<span style="color:var(--r)">Location 2 coordinates outside Singapore range (lat:'+loc2.lat.toFixed(4)+' lng:'+loc2.lng.toFixed(4)+'). Please use a postal code.</span>';return;
+  }
   const dist=_haversineKm(loc1.lat,loc1.lng,loc2.lat,loc2.lng);
+  vdbgLog('DIST CHECK: '+dist.toFixed(3)+'km between '+loc1.label+' and '+loc2.label,'var(--g)');
   const verdict=_proxVerdict(loc1,loc2,dist);
-  if(_res) _res.innerHTML=verdict;
+  // Show resolved addresses + distance in result
+  if(_res) _res.innerHTML=
+    '<div style="font-size:8px;color:var(--t2);margin-bottom:4px">'+
+    '📍 '+loc1.label+' ('+loc1.lat.toFixed(4)+','+loc1.lng.toFixed(4)+')<br>'+
+    '📍 '+loc2.label+' ('+loc2.lat.toFixed(4)+','+loc2.lng.toFixed(4)+')<br>'+
+    '↔ '+dist.toFixed(3)+'km straight-line</div>'+verdict;
   // Add pins and line to map if open
   _proxAddPin(loc1.lat,loc1.lng,loc1.label,'#00d2ff',1);
   _proxAddPin(loc2.lat,loc2.lng,loc2.label,'#ffd700',2);
