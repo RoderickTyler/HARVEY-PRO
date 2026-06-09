@@ -1712,6 +1712,8 @@ async function loadData(){
     const sd=parseCSV(await r2.text());
     sd.forEach(row=>{if(row.town&&row.streets)DB.townStreets[row.town]=row.streets.split('|').filter(Boolean).sort();});
     DB.loaded=true;
+    // Build HDB street list for distance checker datalist — done once at load
+    window._proxStreetList=[...new Set(HDB_PROP_KEYS.map(k=>k.split('|')[1]||'').filter(Boolean))].sort();
     // Auto-register directional street variants in STREET_SHORTFORMS for instant lookup
     // Fixes "clementi west street 1" not resolving — registers all WEST/NTH/ST variants
     (()=>{
@@ -5123,17 +5125,11 @@ function _proxShowMap(block, street, anchorId){
     const distId='dist-'+Date.now();
     distCard.id=distId;
     distCard.style.cssText='margin-top:6px;display:none;';
-    // Build nearby address suggestions from HDB_PROP_KEYS for datalist
-    const _nearbyKeys=HDB_PROP_KEYS.filter(k=>{
-      const _st=k.split('|')[1]||'';
-      return getBlocksFromHDBProp(_st,'').length>0;
-    }).slice(0,500); // limit for performance
-
     distCard.innerHTML=`
       <div style="font-family:var(--mono);font-size:9px;color:var(--a);letter-spacing:1px;margin-bottom:6px">◎ DISTANCE CHECKER</div>
       <div style="font-family:var(--mono);font-size:8px;color:var(--t2);margin-bottom:6px">Tip: enter postal for instant fill, or type block + street. Accepts HDB and private addresses.</div>
       <datalist id="${distId}-streets">
-        ${[...new Set(HDB_PROP_KEYS.map(k=>k.split('|')[1]||'').filter(Boolean))].sort().slice(0,300).map(s=>'<option value="'+s+'">').join('')}
+        ${(window._proxStreetList||[]).map(s=>'<option value="'+s+'">').join('')}
       </datalist>
       <div style="margin-bottom:8px">
         <div style="font-family:var(--mono);font-size:8px;color:var(--c);margin-bottom:3px;letter-spacing:1px">LOCATION 1</div>
