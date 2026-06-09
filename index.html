@@ -4949,15 +4949,38 @@ function _proxShowMap(block, street, anchorId){
           if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
           // Get block coordinates from OneMap search
           const _q=encodeURIComponent('BLK '+block+' '+street);
+          const _ac2=new AbortController();
+          const _acT2=setTimeout(()=>_ac2.abort(),10000);
           fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+_q+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{
+            signal:_ac2.signal,
             headers:{'Authorization':ONEMAP_TOKEN}
           })
-          .then(r=>r.ok?r.json():null)
+          .finally(()=>clearTimeout(_acT2))
+          .then(r=>{
+            vdbgLog('PROX SEARCH: HTTP '+r.status+' q='+decodeURIComponent(_q),'var(--c)');
+            return r.ok?r.json():null;
+          })
           .then(d=>{
+            vdbgLog('PROX SEARCH: raw='+JSON.stringify(d).slice(0,150),'var(--c)');
             let lat=null,lng=null;
             if(d&&d.results&&d.results.length){
-              lat=parseFloat(d.results[0].LATITUDE);
-              lng=parseFloat(d.results[0].LONGITUDE);
+              const _r0=d.results[0];
+              vdbgLog('PROX SEARCH: first result='+JSON.stringify(_r0).slice(0,120),'var(--g)');
+              lat=parseFloat(_r0.LATITUDE||_r0.latitude||_r0.LAT||'');
+              lng=parseFloat(_r0.LONGITUDE||_r0.longitude||_r0.LNG||'');
+            } else {
+              vdbgLog('PROX SEARCH: no results — trying without BLK prefix','var(--a)');
+              // Try without BLK prefix
+              return fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(block+' '+street)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{
+                headers:{'Authorization':ONEMAP_TOKEN}
+              }).then(r2=>r2.ok?r2.json():null).then(d2=>{
+                vdbgLog('PROX SEARCH retry: '+(d2?JSON.stringify(d2).slice(0,100):'null'),'var(--c)');
+                if(d2&&d2.results&&d2.results.length){
+                  lat=parseFloat(d2.results[0].LATITUDE||'');
+                  lng=parseFloat(d2.results[0].LONGITUDE||'');
+                }
+                return {lat,lng};
+              });
             }
             // Fallback: use last known GPS coords if OneMap search fails
             if(!lat||isNaN(lat)){
@@ -4968,7 +4991,8 @@ function _proxShowMap(block, street, anchorId){
                 return;
               }
             }
-            vdbgLog('PROX MAP: '+block+' '+street+' → '+lat.toFixed(5)+','+lng.toFixed(5),'var(--g)');
+            if(typeof lat==='object'&&lat!==null){lng=lat.lng;lat=lat.lat;}
+            vdbgLog('PROX MAP: '+block+' '+street+' → lat='+lat+' lng='+lng,'var(--g)');
             setTimeout(()=>{
               try{
                 _proxMap=L.map(mapId,{zoomControl:true,attributionControl:true,preferCanvas:true});
