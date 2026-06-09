@@ -6564,12 +6564,8 @@ async function _handleInputInner(raw){
       const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locStreet;
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view from your location — <strong>${_dispAddr}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
       speak('Proximity map from your location, sir. Tap show map to expand.');
-      // Use actual GPS coords directly — no second OneMap lookup needed
-      if(_locData.lat&&_locData.lng){
-        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'prox-anchor-'+Date.now().toString().slice(-6),_pAnchorId),600);
-      } else {
-        setTimeout(()=>_proxShowMap(_locBlock,_locStreet,_pAnchorId),600);
-      }
+      // Always use GPS lat/lng directly — no second OneMap lookup
+      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'',_pAnchorId),600);
       loading=false;sbEl.disabled=false;return;
     }
 
@@ -6593,11 +6589,7 @@ async function _handleInputInner(raw){
       const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locData.street;
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations.</span>`);
       speak('Proximity from your location, sir.');
-      if(_locData.lat&&_locData.lng){
-        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locData.street,'',_pAnchorId),600);
-      } else {
-        setTimeout(()=>_proxShowMap(_locData.block,_locData.street,_pAnchorId),600);
-      }
+      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locData.street,'',_pAnchorId),600);
     }
     loading=false;sbEl.disabled=false;return;
   }
@@ -16486,7 +16478,7 @@ async function _locTap(){
       if(_hdbM.length>0){
         // HDB blocks found nearby — happy path
         const _primary=_hdbM[0];
-        _locData={street:_primary.street,block:_primary.block,blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source};
+        _locData={street:_primary.street,block:_primary.block||(_primary.hdbBlocks[0]||''),blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
         workingCtx.streetCtx=_primary.street;
         if(_primary.block) workingCtx.blockCtx=_primary.block;
         // Stamp chip context — user can respond with bare block numbers for 2min
@@ -16510,14 +16502,22 @@ async function _locTap(){
           _locChips.push({label:'🛣 '+m.street.split(' ').slice(0,3).join(' '),val:'block '+m.hdbBlocks[0]+' '+m.street}));
         _locChips.push({label:'ESTIMATE VALUATION',val:'estimate value block '+(_primary.block||_primary.hdbBlocks[0]||'')+' '+_primary.street});
         _locChips.push({label:'📍 RE-LOCATE',val:'__loc_start__'});
-        // Buffer adjust chips
         _locChips.push({label:'◎ ADJUST RADIUS',val:'__loc_adjust__'});
+        _locChips.push({label:'🗺 PROXIMITY',val:'proximity'});
+        _locChips.push({label:'🗺 PROXIMITY',val:'proximity'});
+
+        // Store _locData with GPS coords + ts for proximity freshness
+        _locData={street:_primary.street,block:_primary.block||(_primary.hdbBlocks[0]||''),
+          blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
 
         harveyMsg(_locMsg,_locChips);
         speak('Location confirmed, sir. '+_primary.hdbBlocks.length+' HDB blocks nearby on '+_primary.street+'.');
       } else {
         // OneMap returned addresses but none are HDB streets
-        _locData=null;
+        // Store GPS coords even for non-HDB — needed for proximity
+        _locData={street:_allStreets[0]?_allStreets[0].street:'',
+          block:_allStreets[0]?_allStreets[0].block:'',
+          lat:geo.lat,lng:geo.lng,source:geo.source,ts:Date.now()};
         let _noHdbMsg='Location acquired, sir.<br>';
         if(_allAddr.length){
           _noHdbMsg+='Nearest address: <strong>'+_allAddr.slice(0,3).join('</strong>, <strong>')+'</strong><br>';
@@ -16529,6 +16529,7 @@ async function _locTap(){
           {label:'▲ 500m',val:'__loc_buf_500__'},
           {label:'📍 RE-LOCATE',val:'__loc_start__'},
           {label:'◎ ADJUST RADIUS',val:'__loc_adjust__'},
+          {label:'🗺 PROXIMITY',val:'proximity'},
         ];
         harveyMsg(_noHdbMsg,_noHdbChips);
         speak('Location acquired, sir, but no HDB blocks found within '+_bufM+' metres. You may not be near an HDB precinct.');
