@@ -4949,50 +4949,31 @@ function _proxShowMap(block, street, anchorId){
           if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
           // Get block coordinates from OneMap search
           const _q=encodeURIComponent('BLK '+block+' '+street);
-          const _ac2=new AbortController();
-          const _acT2=setTimeout(()=>_ac2.abort(),10000);
-          fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+_q+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{
-            signal:_ac2.signal,
-            headers:{'Authorization':ONEMAP_TOKEN}
-          })
-          .finally(()=>clearTimeout(_acT2))
-          .then(r=>{
-            vdbgLog('PROX SEARCH: HTTP '+r.status+' q='+decodeURIComponent(_q),'var(--c)');
-            return r.ok?r.json():null;
-          })
-          .then(d=>{
-            vdbgLog('PROX SEARCH: raw='+JSON.stringify(d).slice(0,150),'var(--c)');
-            let lat=null,lng=null;
-            if(d&&d.results&&d.results.length){
-              const _r0=d.results[0];
-              vdbgLog('PROX SEARCH: first result='+JSON.stringify(_r0).slice(0,120),'var(--g)');
-              lat=parseFloat(_r0.LATITUDE||_r0.latitude||_r0.LAT||'');
-              lng=parseFloat(_r0.LONGITUDE||_r0.longitude||_r0.LNG||'');
-            } else {
-              vdbgLog('PROX SEARCH: no results — trying without BLK prefix','var(--a)');
-              // Try without BLK prefix
-              return fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(block+' '+street)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{
-                headers:{'Authorization':ONEMAP_TOKEN}
-              }).then(r2=>r2.ok?r2.json():null).then(d2=>{
-                vdbgLog('PROX SEARCH retry: '+(d2?JSON.stringify(d2).slice(0,100):'null'),'var(--c)');
-                if(d2&&d2.results&&d2.results.length){
-                  lat=parseFloat(d2.results[0].LATITUDE||'');
-                  lng=parseFloat(d2.results[0].LONGITUDE||'');
-                }
-                return {lat,lng};
-              });
-            }
-            // Fallback: use last known GPS coords if OneMap search fails
+          // Resolve block coordinates — try with BLK prefix first, then without
+          async function _getBlockCoords(blk,st){
+            const _headers={'Authorization':ONEMAP_TOKEN};
+            // Attempt 1: BLK prefix
+            try{
+              const _r1=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent('BLK '+blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_headers});
+              vdbgLog('PROX SEARCH: HTTP '+_r1.status+' (with BLK)','var(--c)');
+              if(_r1.ok){const _d1=await _r1.json();if(_d1.results&&_d1.results.length){vdbgLog('PROX SEARCH: hit — '+JSON.stringify(_d1.results[0]).slice(0,80),'var(--g)');return {lat:parseFloat(_d1.results[0].LATITUDE),lng:parseFloat(_d1.results[0].LONGITUDE)};}}
+            }catch(e){vdbgLog('PROX SEARCH attempt 1 err: '+e.message,'var(--r)');}
+            // Attempt 2: without BLK prefix
+            try{
+              const _r2=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_headers});
+              vdbgLog('PROX SEARCH: HTTP '+_r2.status+' (no BLK)','var(--c)');
+              if(_r2.ok){const _d2=await _r2.json();if(_d2.results&&_d2.results.length){vdbgLog('PROX SEARCH: hit — '+JSON.stringify(_d2.results[0]).slice(0,80),'var(--g)');return {lat:parseFloat(_d2.results[0].LATITUDE),lng:parseFloat(_d2.results[0].LONGITUDE)};}}
+            }catch(e){vdbgLog('PROX SEARCH attempt 2 err: '+e.message,'var(--r)');}
+            return null;
+          }
+          _getBlockCoords(block,street).then(coords=>{
+            let lat=coords?coords.lat:null, lng=coords?coords.lng:null;
+            // Fallback to last GPS coords
             if(!lat||isNaN(lat)){
-              if(_locData&&_locData.lat){lat=_locData.lat;lng=_locData.lng;}
-              else{
-                // Can't place map without coords
-                mapDiv.innerHTML='<div style="color:var(--a);font-family:var(--mono);font-size:9px;padding:12px;text-align:center">Could not resolve block coordinates, sir.</div>';
-                return;
-              }
+              if(_locData&&_locData.lat){lat=_locData.lat;lng=_locData.lng;vdbgLog('PROX MAP: using GPS fallback','var(--a)');}
+              else{mapDiv.innerHTML='<div style="color:var(--a);font-family:var(--mono);font-size:9px;padding:12px;text-align:center">Could not resolve block coordinates, sir.</div>';return;}
             }
-            if(typeof lat==='object'&&lat!==null){lng=lat.lng;lat=lat.lat;}
-            vdbgLog('PROX MAP: '+block+' '+street+' → lat='+lat+' lng='+lng,'var(--g)');
+            vdbgLog('PROX MAP: '+block+' → '+lat.toFixed(5)+','+lng.toFixed(5),'var(--g)');
             setTimeout(()=>{
               try{
                 _proxMap=L.map(mapId,{zoomControl:true,attributionControl:true,preferCanvas:true});
@@ -5018,10 +4999,9 @@ function _proxShowMap(block, street, anchorId){
                   fillColor:'rgba(0,210,255,0.07)',
                   fillOpacity:1
                 }).addTo(_proxMap);
-              }catch(e){vdbgLog('PROX MAP error: '+e.message,'var(--r)');}
+              }catch(e){vdbgLog('PROX MAP init error: '+e.message,'var(--r)');}
             },80);
-          })
-          .catch(e=>vdbgLog('PROX MAP coords fetch: '+e.message,'var(--r)'));
+          }).catch(e=>vdbgLog('PROX MAP error: '+e.message,'var(--r)'));
         });
       }
     };
