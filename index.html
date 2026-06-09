@@ -5062,6 +5062,114 @@ async function _getBlockCoords(blk,st){
   return (await _omFetch('BLK '+blk+' '+st))||(await _omFetch(blk+' '+st));
 }
 
+// Proximity map using known lat/lng directly (from GPS location)
+function _proxShowMapCoords(lat,lng,block,street,_unused,anchorId){
+  // Reuses _proxShowMap logic but skips the OneMap coord lookup
+  function _doAttach(){
+    const anchor=document.getElementById(anchorId);
+    if(!anchor){
+      _proxShowMapCoords._retries=(_proxShowMapCoords._retries||0)+1;
+      if(_proxShowMapCoords._retries<8) setTimeout(()=>_proxShowMapCoords(lat,lng,block,street,'',anchorId),400);
+      else _proxShowMapCoords._retries=0;
+      return;
+    }
+    _proxShowMapCoords._retries=0;
+    const oldW=document.getElementById('prox-map-wrapper');
+    if(oldW) oldW.remove();
+    if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+
+    const mapId='prox-map-'+Date.now();
+    const wrapper=document.createElement('div');
+    wrapper.id='prox-map-wrapper';
+    wrapper.style.cssText='margin-top:8px;';
+
+    const toggle=document.createElement('button');
+    toggle.className='chip';
+    toggle.style.cssText='font-size:9px;padding:4px 10px;letter-spacing:1px;margin-bottom:6px;';
+    toggle.textContent='🗺 SHOW MAP';
+
+    const mapDiv=document.createElement('div');
+    mapDiv.id=mapId;
+    mapDiv.style.cssText='display:none;width:100%;height:300px;border-radius:4px;border:1px solid rgba(0,210,255,.15);overflow:hidden;';
+
+    toggle.onclick=()=>{
+      const visible=mapDiv.style.display!=='none';
+      if(visible){
+        mapDiv.style.display='none';toggle.textContent='🗺 SHOW MAP';
+        _proxClearDistLayers();if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+      } else {
+        mapDiv.style.display='block';toggle.textContent='🗺 HIDE MAP';
+        _locLoadLeaflet(()=>{
+          _proxClearDistLayers();if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+          setTimeout(()=>{
+            try{
+              _proxMap=L.map(mapId,{zoomControl:true,attributionControl:true,preferCanvas:true});
+              L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png',{
+                detectRetina:true,maxZoom:19,minZoom:11,
+                attribution:'<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:16px;width:16px;vertical-align:middle"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> &copy; contributors | <a href="https://www.sla.gov.sg/" target="_blank">SLA</a>'
+              }).addTo(_proxMap);
+              _proxMap.setView([lat,lng],13);
+              setTimeout(()=>{if(_proxMap)_proxMap.invalidateSize();},120);
+              const pinIcon=L.divIcon({html:'<div style="width:12px;height:12px;border-radius:50%;background:var(--c);border:2px solid #fff;box-shadow:0 0 8px var(--c)"></div>',className:'',iconAnchor:[6,6]});
+              L.marker([lat,lng],{icon:pinIcon,zIndexOffset:1000}).addTo(_proxMap)
+                .bindPopup('<span style="font-family:var(--mono);font-size:10px">'+(block?'BLK '+block+'<br>':'')+street+'</span>');
+              L.circle([lat,lng],{radius:4000,color:'rgba(0,210,255,0.6)',weight:1.5,fillColor:'rgba(0,210,255,0.07)',fillOpacity:1}).addTo(_proxMap);
+            }catch(e){vdbgLog('PROX MAP (coords) error: '+e.message,'var(--r)');}
+          },80);
+        });
+      }
+    };
+
+    // Distance checker card
+    const distCard=document.createElement('div');
+    const distId='dist-'+Date.now();
+    distCard.id=distId;
+    distCard.style.cssText='margin-top:6px;display:none;';
+    distCard.innerHTML=`
+      <div style="font-family:var(--mono);font-size:9px;color:var(--a);letter-spacing:1px;margin-bottom:6px">◎ DISTANCE CHECKER</div>
+      <div style="font-family:var(--mono);font-size:8px;color:var(--t2);margin-bottom:6px">Tip: enter postal for instant fill, or type block + street. Accepts HDB and private — e.g. <em>96a henderson road</em>.</div>
+      <datalist id="${distId}-streets">
+        ${(window._proxStreetList||[]).map(s=>'<option value="'+s+'">').join('')}
+      </datalist>
+      <div style="margin-bottom:8px">
+        <div style="font-family:var(--mono);font-size:8px;color:var(--c);margin-bottom:3px;letter-spacing:1px">LOCATION 1</div>
+        <div style="display:flex;gap:6px;margin-bottom:3px">
+          <input id="${distId}-p1" class="hud-select" type="text" maxlength="6" placeholder="Postal" style="width:80px;letter-spacing:1px" oninput="proxAutoFill('${distId}',1)">
+          <input id="${distId}-b1" class="hud-select" type="text" placeholder="Block" style="flex:1" value="${block||''}">
+        </div>
+        <input id="${distId}-s1" class="hud-select" type="text" placeholder="Street name" list="${distId}-streets" style="width:100%" value="${street||''}">
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-family:var(--mono);font-size:8px;color:var(--a);margin-bottom:3px;letter-spacing:1px">LOCATION 2</div>
+        <div style="display:flex;gap:6px;margin-bottom:3px">
+          <input id="${distId}-p2" class="hud-select" type="text" maxlength="6" placeholder="Postal" style="width:80px;letter-spacing:1px" oninput="proxAutoFill('${distId}',2)">
+          <input id="${distId}-b2" class="hud-select" type="text" placeholder="Block / Unit" style="flex:1">
+        </div>
+        <input id="${distId}-s2" class="hud-select" type="text" placeholder="Street name — e.g. 96a henderson road" list="${distId}-streets" style="width:100%">
+      </div>
+      <button class="chip" style="font-size:9px;padding:5px 16px" onclick="proxCheck('${distId}')">▶ CHECK DISTANCE</button>
+      <div id="${distId}-result" style="margin-top:8px;font-family:var(--mono);font-size:10px;line-height:1.6"></div>
+    `;
+
+    const distToggle=document.createElement('button');
+    distToggle.className='chip';
+    distToggle.style.cssText='font-size:9px;padding:4px 10px;letter-spacing:1px;margin-bottom:6px;margin-left:6px;';
+    distToggle.textContent='◎ CHECK DISTANCE';
+    distToggle.onclick=()=>{
+      const vis=distCard.style.display!=='none';
+      distCard.style.display=vis?'none':'block';
+      distToggle.textContent=vis?'◎ CHECK DISTANCE':'◎ HIDE CHECKER';
+    };
+
+    wrapper.appendChild(toggle);
+    wrapper.appendChild(distToggle);
+    wrapper.appendChild(mapDiv);
+    wrapper.appendChild(distCard);
+    anchor.appendChild(wrapper);
+  }
+  _doAttach();
+}
+
 function _proxShowMap(block, street, anchorId){
   // anchorId is stamped on the Harvey message at render time — reliable anchor
   function _doAttach(){
@@ -6431,19 +6539,76 @@ async function _handleInputInner(raw){
     loading=false;sbEl.disabled=false;return;
   }
 
-  // ── PROXIMITY MAP — block level only, before intent detection ──
+  // ── PROXIMITY MAP — before intent detection ──
   if(/^(proximity|proximity search|proximity details|nearby|whats nearby|show map|4km|4 km)$/i.test(raw.trim())){
+    _proxAwaitingLoc=0;
+    const _LOC_FRESH=_locData&&_locData.ts&&(Date.now()-_locData.ts)<300000; // 5 min
     const _pb=workingCtx.blockCtx||convCtx.block||null;
     const _ps=workingCtx.streetCtx||convCtx.street||null;
-    if(_pb&&_ps){
-      _proxAwaitingLoc=0; // reset any pending state
-      // Stamp a unique anchor on a new Harvey message, then attach map to it
+    const _locBlock=_locData?(_locData.block||''):null;
+    const _locStreet=_locData?(_locData.street||''):null;
+
+    // CASE 1: loc fresh AND last searched block is different → ask user
+    if(_LOC_FRESH&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
+      harveyMsg(`Two locations in context, sir. Which would you like to use for the proximity search?`,[
+        {label:'📍 MY LOCATION — '+(_locBlock?'Blk '+_locBlock+' ':'')+(_locStreet||'current GPS'),val:'__prox_use_loc__'},
+        {label:'🔍 LAST SEARCHED — Blk '+_pb+' '+(_ps||''),val:'__prox_use_ctx__'}
+      ]);
+      loading=false;sbEl.disabled=false;return;
+    }
+
+    // CASE 2: loc fresh, same block or no ctx conflict → use loc directly
+    if(_LOC_FRESH&&_locStreet){
       const _pAnchorId='prox-anchor-'+Date.now();
-      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view for Block <strong>${_pb}</strong> on <strong>${_ps}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em> to use voice.</span>`);
+      const _dispBlock=_locBlock||'';
+      const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locStreet;
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view from your location — <strong>${_dispAddr}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
+      speak('Proximity map from your location, sir. Tap show map to expand.');
+      // Use actual GPS coords directly — no second OneMap lookup needed
+      if(_locData.lat&&_locData.lng){
+        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'prox-anchor-'+Date.now().toString().slice(-6),_pAnchorId),600);
+      } else {
+        setTimeout(()=>_proxShowMap(_locBlock,_locStreet,_pAnchorId),600);
+      }
+      loading=false;sbEl.disabled=false;return;
+    }
+
+    // CASE 3: no fresh loc → use workingCtx block/street
+    if(_pb&&_ps){
+      const _pAnchorId='prox-anchor-'+Date.now();
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view for Block <strong>${_pb}</strong> on <strong>${_ps}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
       speak('Proximity map for Block '+_pb+', sir. Tap show map to expand.');
       setTimeout(()=>_proxShowMap(_pb,_ps,_pAnchorId),600);
     } else {
-      harveyMsg('Proximity view is available at block level, sir. Please search for a specific block first — for example: <em>block 602 clementi west street 1</em>');
+      harveyMsg('Proximity view needs a location or block context, sir. Please tap 📍 LOC to detect your location, or search a block first — for example: <em>96a henderson road</em>.');
+    }
+    loading=false;sbEl.disabled=false;return;
+  }
+
+  // ── PROXIMITY CHOICE chips ──
+  if(raw==='__prox_use_loc__'){
+    if(_locData&&_locData.street){
+      const _pAnchorId='prox-anchor-'+Date.now();
+      const _dispBlock=_locData.block||'';
+      const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locData.street;
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations.</span>`);
+      speak('Proximity from your location, sir.');
+      if(_locData.lat&&_locData.lng){
+        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locData.street,'',_pAnchorId),600);
+      } else {
+        setTimeout(()=>_proxShowMap(_locData.block,_locData.street,_pAnchorId),600);
+      }
+    }
+    loading=false;sbEl.disabled=false;return;
+  }
+  if(raw==='__prox_use_ctx__'){
+    const _pb2=workingCtx.blockCtx||convCtx.block||null;
+    const _ps2=workingCtx.streetCtx||convCtx.street||null;
+    if(_pb2&&_ps2){
+      const _pAnchorId='prox-anchor-'+Date.now();
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity for Block <strong>${_pb2}</strong> on <strong>${_ps2}</strong>, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations.</span>`);
+      speak('Proximity for Block '+_pb2+', sir.');
+      setTimeout(()=>_proxShowMap(_pb2,_ps2,_pAnchorId),600);
     }
     loading=false;sbEl.disabled=false;return;
   }
