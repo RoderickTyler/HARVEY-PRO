@@ -4915,28 +4915,52 @@ function _haversineKm(lat1,lng1,lat2,lng2){
 
 // Resolve any address to {lat,lng,label} via OneMap search or postal lookup
 async function _proxResolveAddress(postal,block,street){
-  // Try postal first (fastest, most accurate)
-  if(postal&&postal.length===6){
-    const _pl=lookupPostal(postal);
-    if(_pl){
-      // HDB — get coords from OneMap
-      const _coords=await _getBlockCoords(_pl.block,_pl.street);
-      if(_coords) return {lat:_coords.lat,lng:_coords.lng,label:'Blk '+_pl.block+' '+_pl.street,isHDB:true};
-    }
-    // Private — try OneMap search by postal
+  const _h={'Authorization':ONEMAP_TOKEN};
+  // Helper: search OneMap with a query string, return first result with coords
+  async function _omSearch(q){
     try{
-      const _r=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+postal+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:{'Authorization':ONEMAP_TOKEN}});
-      if(_r.ok){const _d=await _r.json();if(_d.results&&_d.results.length){const _res=_d.results[0];return {lat:parseFloat(_res.LATITUDE),lng:parseFloat(_res.LONGITUDE),label:_res.ADDRESS||postal,isHDB:false};}}
+      const _r=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(q)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
+      if(_r.ok){const _d=await _r.json();if(_d.results&&_d.results.length){const _res=_d.results[0];const lat=parseFloat(_res.LATITUDE),lng=parseFloat(_res.LONGITUDE);if(!isNaN(lat)&&!isNaN(lng))return{lat,lng,label:_res.ADDRESS||q,searchval:_res.SEARCHVAL||''};}}
     }catch(e){}
+    return null;
   }
-  // Try block+street
+
+  // 1. Postal lookup — HDB first via _POSTAL_DATA
+  if(postal&&postal.replace(/[^0-9]/g,'').length===6){
+    const _p6=postal.replace(/[^0-9]/g,'');
+    const _pl=lookupPostal(_p6);
+    if(_pl){
+      const _c=await _getBlockCoords(_pl.block,_pl.street);
+      if(_c) return{lat:_c.lat,lng:_c.lng,label:'Blk '+_pl.block+' '+_pl.street,isHDB:true};
+    }
+    // Private — search by postal
+    const _rp=await _omSearch(_p6);
+    if(_rp) return{..._rp,isHDB:false};
+  }
+
+  // 2. Block + street (may be partial — try multiple formats)
   if(block&&street){
-    const _coords=await _getBlockCoords(block,street);
-    if(_coords){
-      const _isHDB=!!lookupPostal||getFlatTypesFromHDBProp(block.toUpperCase(),street.toUpperCase()).length>0;
-      return {lat:_coords.lat,lng:_coords.lng,label:'Blk '+block+' '+street,isHDB:_isHDB};
+    const _b=block.trim(),_s=street.trim().toUpperCase();
+    // Try: BLK {block} {street}, {block} {street}, just {street} {block}
+    for(const _q of [`BLK ${_b} ${_s}`,`${_b} ${_s}`,_s+' '+_b,_s]){
+      const _r=await _omSearch(_q);
+      if(_r){
+        const _isHDB=getFlatTypesFromHDBProp(_b,_s).length>0||!!lookupPostal(_r.label?.match(/\d{6}/)?.[0]||'');
+        return{..._r,label:_b?'Blk '+_b+' '+_s:_r.label,isHDB:_isHDB};
+      }
     }
   }
+
+  // 3. Free text — try the combined block+street as one search string
+  if(block&&!street){
+    const _r=await _omSearch(block);
+    if(_r) return{..._r,isHDB:false};
+  }
+  if(street&&!block){
+    const _r=await _omSearch(street);
+    if(_r) return{..._r,isHDB:false};
+  }
+
   return null;
 }
 
@@ -5099,24 +5123,36 @@ function _proxShowMap(block, street, anchorId){
     const distId='dist-'+Date.now();
     distCard.id=distId;
     distCard.style.cssText='margin-top:6px;display:none;';
+    // Build nearby address suggestions from HDB_PROP_KEYS for datalist
+    const _nearbyKeys=HDB_PROP_KEYS.filter(k=>{
+      const _st=k.split('|')[1]||'';
+      return getBlocksFromHDBProp(_st,'').length>0;
+    }).slice(0,500); // limit for performance
+
     distCard.innerHTML=`
-      <div style="font-family:var(--mono);font-size:9px;color:var(--a);letter-spacing:1px;margin-bottom:6px">◎ DISTANCE CHECKER — enter two locations</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <div>
-          <div style="font-family:var(--mono);font-size:8px;color:var(--t2);margin-bottom:3px">LOCATION 1</div>
-          <input id="${distId}-p1" class="hud-select" type="text" maxlength="6" placeholder="Postal (optional)" style="width:100%;margin-bottom:3px;letter-spacing:1px" oninput="proxAutoFill('${distId}',1)">
-          <input id="${distId}-b1" class="hud-select" type="text" placeholder="Block" style="width:100%;margin-bottom:3px">
-          <input id="${distId}-s1" class="hud-select" type="text" placeholder="Street name" style="width:100%">
+      <div style="font-family:var(--mono);font-size:9px;color:var(--a);letter-spacing:1px;margin-bottom:6px">◎ DISTANCE CHECKER</div>
+      <div style="font-family:var(--mono);font-size:8px;color:var(--t2);margin-bottom:6px">Tip: enter postal for instant fill, or type block + street. Accepts HDB and private addresses.</div>
+      <datalist id="${distId}-streets">
+        ${[...new Set(HDB_PROP_KEYS.map(k=>k.split('|')[1]||'').filter(Boolean))].sort().slice(0,300).map(s=>'<option value="'+s+'">').join('')}
+      </datalist>
+      <div style="margin-bottom:8px">
+        <div style="font-family:var(--mono);font-size:8px;color:var(--c);margin-bottom:3px;letter-spacing:1px">LOCATION 1</div>
+        <div style="display:flex;gap:6px;margin-bottom:3px">
+          <input id="${distId}-p1" class="hud-select" type="text" maxlength="6" placeholder="Postal" style="width:80px;letter-spacing:1px" oninput="proxAutoFill('${distId}',1)">
+          <input id="${distId}-b1" class="hud-select" type="text" placeholder="Block / Unit" style="flex:1">
         </div>
-        <div>
-          <div style="font-family:var(--mono);font-size:8px;color:var(--t2);margin-bottom:3px">LOCATION 2</div>
-          <input id="${distId}-p2" class="hud-select" type="text" maxlength="6" placeholder="Postal (optional)" style="width:100%;margin-bottom:3px;letter-spacing:1px" oninput="proxAutoFill('${distId}',2)">
-          <input id="${distId}-b2" class="hud-select" type="text" placeholder="Block" style="width:100%;margin-bottom:3px">
-          <input id="${distId}-s2" class="hud-select" type="text" placeholder="Street name" style="width:100%">
-        </div>
+        <input id="${distId}-s1" class="hud-select" type="text" placeholder="Street name" list="${distId}-streets" style="width:100%">
       </div>
-      <button class="chip" style="font-size:9px;padding:4px 14px" onclick="proxCheck('${distId}')">▶ CHECK DISTANCE</button>
-      <div id="${distId}-result" style="margin-top:8px;font-family:var(--mono);font-size:10px;line-height:1.5"></div>
+      <div style="margin-bottom:10px">
+        <div style="font-family:var(--mono);font-size:8px;color:var(--a);margin-bottom:3px;letter-spacing:1px">LOCATION 2</div>
+        <div style="display:flex;gap:6px;margin-bottom:3px">
+          <input id="${distId}-p2" class="hud-select" type="text" maxlength="6" placeholder="Postal" style="width:80px;letter-spacing:1px" oninput="proxAutoFill('${distId}',2)">
+          <input id="${distId}-b2" class="hud-select" type="text" placeholder="Block / Unit" style="flex:1">
+        </div>
+        <input id="${distId}-s2" class="hud-select" type="text" placeholder="Street name" list="${distId}-streets" style="width:100%">
+      </div>
+      <button class="chip" style="font-size:9px;padding:5px 16px" onclick="proxCheck('${distId}')">▶ CHECK DISTANCE</button>
+      <div id="${distId}-result" style="margin-top:8px;font-family:var(--mono);font-size:10px;line-height:1.6"></div>
     `;
 
     // Check distance toggle chip
@@ -5132,8 +5168,20 @@ function _proxShowMap(block, street, anchorId){
       if(!vis){
         const _b1=document.getElementById(distId+'-b1');
         const _s1=document.getElementById(distId+'-s1');
+        const _p1=document.getElementById(distId+'-p1');
         if(_b1&&!_b1.value) _b1.value=block||'';
         if(_s1&&!_s1.value) _s1.value=street||'';
+        // Auto-fill postal if we can find it
+        if(_p1&&!_p1.value&&block&&street){
+          const _pk=String(block).toUpperCase()+'|'+String(street).toUpperCase();
+          const _pi=HDB_PROP_KEYS.indexOf(_pk);
+          if(_pi>=0){
+            // Find postal from _POSTAL_DATA
+            for(const [pos,val] of Object.entries(_POSTAL_DATA)){
+              if(val===block+'|'+street){_p1.value=pos;_p1.style.borderColor='var(--g)';break;}
+            }
+          }
+        }
       }
     };
 
@@ -5167,7 +5215,8 @@ function proxAutoFill(distId,num){
 // Check distance between two locations
 async function proxCheck(distId){
   const _res=document.getElementById(distId+'-result');
-  if(_res) _res.textContent='Resolving addresses, sir...';
+  if(_res) _res.innerHTML='<span style="color:var(--t2)">Resolving addresses, sir...</span>';
+  try{
   const p1=document.getElementById(distId+'-p1')?.value.trim();
   const b1=document.getElementById(distId+'-b1')?.value.trim();
   const s1=document.getElementById(distId+'-s1')?.value.trim();
@@ -5189,6 +5238,10 @@ async function proxCheck(distId){
   _proxDrawLine(loc1.lat,loc1.lng,loc2.lat,loc2.lng);
   // Fit map to show both pins
   if(_proxMap) _proxMap.fitBounds([[loc1.lat,loc1.lng],[loc2.lat,loc2.lng]],{padding:[40,40]});
+  }catch(_ce){
+    if(_res) _res.innerHTML='<span style="color:var(--r)">Error resolving addresses: '+(_ce.message||'unknown')+'</span>';
+    vdbgLog('proxCheck error: '+(_ce.message||_ce),'var(--r)');
+  }
 }
 
 function hudPostalLookup(fid){
