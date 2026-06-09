@@ -451,6 +451,8 @@ tr:hover td{background:rgba(0,212,255,.03)}
 }
 
 </style>
+  <!-- Leaflet — loaded lazily only when location map is activated -->
+  <link id="leaflet-css" rel="stylesheet" href="" disabled>
 </head>
 <body>
 <div class="grid-bg"></div>
@@ -886,7 +888,14 @@ const ONEMAP_TOKEN_SHEET_URL=`https://docs.google.com/spreadsheets/d/1yIiqAYwkUz
 let _locState='idle';
 let _locGeoWatcher=null;
 let _locData=null;
-let _locBuffer=100; // metres — user adjustable 50-500
+let _locBuffer=100;
+// Location chip response window — active for 2min after Harvey shows location chips
+let _locChipCtx={street:null,blocks:[],ts:0};
+// Location map
+let _locMap=null;        // Leaflet map instance (location)
+let _locMapLoaded=false; // Leaflet script loaded flag
+let _locMapEl=null;      // map container element id
+let _proxMap=null;       // Leaflet map instance (proximity) // street + valid blocks from last location result // metres — user adjustable 50-500
 let _lastExpandPromptTs=0; // timestamp when Harvey last showed expand scope panel
 
 // ══ ENERGY MONITOR — detects user speaking over Harvey ══
@@ -4752,6 +4761,254 @@ function showHDBInfo(block, street, town){
   harveyMsg(card, chips);
 }
 
+// ── OneMap basemap — shown only after location confirmed ──
+function _locLoadLeaflet(cb){
+  if(_locMapLoaded){cb();return;}
+  // Load Leaflet CSS
+  const css=document.getElementById('leaflet-css');
+  if(css){css.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';css.disabled=false;}
+  // Load Leaflet JS
+  const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+  s.onload=()=>{_locMapLoaded=true;cb();};
+  s.onerror=()=>vdbgLog('Leaflet load failed','var(--r)');
+  document.head.appendChild(s);
+}
+
+function _locShowMap(lat,lng,hdbBlocks,street,_retry){
+  // Find last Harvey message — retry up to 5 times if not ready yet
+  const msgs=document.querySelectorAll('.msg-ai');
+  if(!msgs.length){
+    if((_retry||0)<5) setTimeout(()=>_locShowMap(lat,lng,hdbBlocks,street,(_retry||0)+1),400);
+    return;
+  }
+  const lastMsg=msgs[msgs.length-1];
+  // Sanity check — last msg should have some content
+  if(!lastMsg.textContent.trim()&&(_retry||0)<5){
+    setTimeout(()=>_locShowMap(lat,lng,hdbBlocks,street,(_retry||0)+1),400);
+    return;
+  }
+
+  // Remove any existing map
+  _locDestroyMap();
+
+  // Small guard — if somehow called twice, skip
+  if(document.getElementById('loc-map-wrapper')){return;}
+
+  // Create toggle chip
+  const chipId='loc-map-toggle-'+Date.now();
+  const mapId='loc-map-'+Date.now();
+  _locMapEl=mapId;
+
+  const wrapper=document.createElement('div');
+  wrapper.id='loc-map-wrapper';
+  wrapper.style.cssText='margin-top:8px;';
+
+  // Toggle button — collapsed by default
+  const toggle=document.createElement('button');
+  toggle.id=chipId;
+  toggle.className='chip';
+  toggle.style.cssText='font-size:9px;padding:4px 10px;letter-spacing:1px;margin-bottom:6px;';
+  toggle.textContent='🗺 SHOW MAP';
+  toggle.onclick=()=>{
+    const mapDiv=document.getElementById(mapId);
+    if(!mapDiv) return;
+    const visible=mapDiv.style.display!=='none';
+    if(visible){
+      mapDiv.style.display='none';
+      toggle.textContent='🗺 SHOW MAP';
+      // Destroy map to free memory
+      if(_locMap){_locMap.remove();_locMap=null;}
+    } else {
+      mapDiv.style.display='block';
+      toggle.textContent='🗺 HIDE MAP';
+      // Init map
+      _locLoadLeaflet(()=>{
+        if(_locMap){_locMap.remove();_locMap=null;}
+        setTimeout(()=>{
+          try{
+            _locMap=L.map(mapId,{zoomControl:true,attributionControl:true});
+            // OneMap Night tiles
+            L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png',{
+              detectRetina:true,maxZoom:19,minZoom:11,
+              attribution:'<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:16px;width:16px;vertical-align:middle"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> &copy; contributors | <a href="https://www.sla.gov.sg/" target="_blank">SLA</a>'
+            }).addTo(_locMap);
+
+            // Centre on user location
+            _locMap.setView([lat,lng],16);
+            // Force tile redraw — needed when container was previously hidden
+            setTimeout(()=>{if(_locMap)_locMap.invalidateSize();},100);
+
+            // User pin — cyan dot
+            const userIcon=L.divIcon({
+              html:'<div style="width:14px;height:14px;border-radius:50%;background:var(--c);border:2px solid #fff;box-shadow:0 0 6px var(--c)"></div>',
+              className:'',iconAnchor:[7,7]
+            });
+            L.marker([lat,lng],{icon:userIcon,zIndexOffset:1000})
+              .addTo(_locMap)
+              .bindPopup('<span style="font-family:var(--mono);font-size:10px;color:#000">📍 You are here</span>');
+
+            // HDB block markers — tap to load block detail in Harvey
+            if(hdbBlocks&&hdbBlocks.length&&street){
+              hdbBlocks.forEach(blk=>{
+                // Use OneMap search to get coords for each block
+                fetch(`https://www.onemap.gov.sg/api/common/elastic/search?searchVal=BLK+${blk}+${encodeURIComponent(street)}&returnGeom=Y&getAddrDetails=Y&pageNum=1`,{
+                  headers:{'Authorization':ONEMAP_TOKEN}
+                })
+                .then(r=>r.ok?r.json():null)
+                .then(d=>{
+                  if(!d||!d.results||!d.results.length) return;
+                  const res=d.results[0];
+                  const bLat=parseFloat(res.LATITUDE);
+                  const bLng=parseFloat(res.LONGITUDE);
+                  if(isNaN(bLat)||isNaN(bLng)) return;
+                  const blkIcon=L.divIcon({
+                    html:'<div style="background:rgba(0,10,20,.85);border:1px solid var(--c);color:var(--c);font-family:var(--mono);font-size:8px;padding:2px 5px;border-radius:2px;white-space:nowrap;box-shadow:0 0 4px rgba(0,210,255,.3)">BLK '+blk+'</div>',
+                    className:'',iconAnchor:[20,10]
+                  });
+                  L.marker([bLat,bLng],{icon:blkIcon})
+                    .addTo(_locMap)
+                    .on('click',()=>{
+                      // Collapse map, trigger block detail via chat input
+                      mapDiv.style.display='none';
+                      toggle.textContent='🗺 SHOW MAP';
+                      if(_locMap){_locMap.remove();_locMap=null;}
+                      ciEl.value='block '+blk+' '+street;
+                      handleInput();
+                    });
+                }).catch(()=>{});
+              });
+            }
+          }catch(e){vdbgLog('Map init error: '+e.message,'var(--r)');}
+        },50);
+      });
+    }
+  };
+
+  // Map container — hidden by default
+  const mapDiv=document.createElement('div');
+  mapDiv.id=mapId;
+  mapDiv.style.cssText='display:none;width:100%;height:220px;border-radius:4px;border:1px solid rgba(0,210,255,.15);overflow:hidden;';
+
+  wrapper.appendChild(toggle);
+  wrapper.appendChild(mapDiv);
+  lastMsg.appendChild(wrapper);
+}
+
+function _locDestroyMap(){
+  if(_locMap){try{_locMap.remove();}catch(e){}; _locMap=null;}
+  const old=document.getElementById('loc-map-wrapper');
+  if(old) old.remove();
+}
+
+// ── Proximity map — 4km circle around a specific block ──
+function _proxShowMap(block, street, anchorId){
+  // anchorId is stamped on the Harvey message at render time — reliable anchor
+  function _doAttach(){
+    const anchor=document.getElementById(anchorId);
+    if(!anchor){
+      // Retry up to 8 times with 400ms gap — handles slow DOM paint on iOS
+      _proxShowMap._retries=(_proxShowMap._retries||0)+1;
+      if(_proxShowMap._retries<8) setTimeout(()=>_proxShowMap(block,street,anchorId),400);
+      else _proxShowMap._retries=0;
+      return;
+    }
+    _proxShowMap._retries=0;
+
+    // Remove any existing prox map wrapper
+    const oldW=document.getElementById('prox-map-wrapper');
+    if(oldW) oldW.remove();
+    if(_proxMap){try{_proxMap.remove();}catch(e){}  _proxMap=null;}
+
+    const mapId='prox-map-'+Date.now();
+    const wrapper=document.createElement('div');
+    wrapper.id='prox-map-wrapper';
+    wrapper.style.cssText='margin-top:8px;';
+
+    // Toggle chip
+    const toggle=document.createElement('button');
+    toggle.className='chip';
+    toggle.style.cssText='font-size:9px;padding:4px 10px;letter-spacing:1px;margin-bottom:6px;';
+    toggle.textContent='🗺 SHOW MAP';
+
+    // Map container — hidden by default
+    const mapDiv=document.createElement('div');
+    mapDiv.id=mapId;
+    mapDiv.style.cssText='display:none;width:100%;height:300px;border-radius:4px;border:1px solid rgba(0,210,255,.15);overflow:hidden;';
+
+    toggle.onclick=()=>{
+      const visible=mapDiv.style.display!=='none';
+      if(visible){
+        mapDiv.style.display='none';
+        toggle.textContent='🗺 SHOW MAP';
+        if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+      } else {
+        mapDiv.style.display='block';
+        toggle.textContent='🗺 HIDE MAP';
+        _locLoadLeaflet(()=>{
+          if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+          // Get block coordinates from OneMap search
+          const _q=encodeURIComponent('BLK '+block+' '+street);
+          fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+_q+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{
+            headers:{'Authorization':ONEMAP_TOKEN}
+          })
+          .then(r=>r.ok?r.json():null)
+          .then(d=>{
+            let lat=null,lng=null;
+            if(d&&d.results&&d.results.length){
+              lat=parseFloat(d.results[0].LATITUDE);
+              lng=parseFloat(d.results[0].LONGITUDE);
+            }
+            // Fallback: use last known GPS coords if OneMap search fails
+            if(!lat||isNaN(lat)){
+              if(_locData&&_locData.lat){lat=_locData.lat;lng=_locData.lng;}
+              else{
+                // Can't place map without coords
+                mapDiv.innerHTML='<div style="color:var(--a);font-family:var(--mono);font-size:9px;padding:12px;text-align:center">Could not resolve block coordinates, sir.</div>';
+                return;
+              }
+            }
+            vdbgLog('PROX MAP: '+block+' '+street+' → '+lat.toFixed(5)+','+lng.toFixed(5),'var(--g)');
+            setTimeout(()=>{
+              try{
+                _proxMap=L.map(mapId,{zoomControl:true,attributionControl:true,preferCanvas:true});
+                L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png',{
+                  detectRetina:true,maxZoom:19,minZoom:11,
+                  attribution:'<img src="https://www.onemap.gov.sg/web-assets/images/logo/om_logo.png" style="height:16px;width:16px;vertical-align:middle"/> <a href="https://www.onemap.gov.sg/" target="_blank">OneMap</a> &copy; contributors | <a href="https://www.sla.gov.sg/" target="_blank">SLA</a>'
+                }).addTo(_proxMap);
+                _proxMap.setView([lat,lng],13);
+                setTimeout(()=>{if(_proxMap)_proxMap.invalidateSize();},120);
+                // Block pin
+                const pinIcon=L.divIcon({
+                  html:'<div style="width:12px;height:12px;border-radius:50%;background:var(--c);border:2px solid #fff;box-shadow:0 0 8px var(--c)"></div>',
+                  className:'',iconAnchor:[6,6]
+                });
+                L.marker([lat,lng],{icon:pinIcon,zIndexOffset:1000})
+                  .addTo(_proxMap)
+                  .bindPopup('<span style="font-family:var(--mono);font-size:10px">BLK '+block+'<br>'+street+'</span>');
+                // 4km circle
+                L.circle([lat,lng],{
+                  radius:4000,
+                  color:'rgba(0,210,255,0.6)',
+                  weight:1.5,
+                  fillColor:'rgba(0,210,255,0.07)',
+                  fillOpacity:1
+                }).addTo(_proxMap);
+              }catch(e){vdbgLog('PROX MAP error: '+e.message,'var(--r)');}
+            },80);
+          })
+          .catch(e=>vdbgLog('PROX MAP coords fetch: '+e.message,'var(--r)'));
+        });
+      }
+    };
+
+    wrapper.appendChild(toggle);
+    wrapper.appendChild(mapDiv);
+    anchor.appendChild(wrapper);
+  }
+  _doAttach();
+}
+
 function hudPostalLookup(fid){
   const inp=document.getElementById(fid+'-postal');
   if(!inp)return;
@@ -5826,6 +6083,48 @@ async function _handleInputInner(raw){
     loading=false;sbEl.disabled=false;return;
   }
 
+  // ── LOC CHIP RESPONSE — bare block number after location result ──
+  // Only fires within 2min of Harvey showing location chips, only for valid blocks on located street
+  const _locChipFresh=_locChipCtx.ts>0&&(Date.now()-_locChipCtx.ts)<120000;
+  if(_locChipFresh&&_locChipCtx.street&&_locChipCtx.blocks.length){
+    // Match bare block number — text or normalised speech e.g. "487", "blk 487", "block 487"
+    const _lcRaw=raw.trim().toUpperCase().replace(/^(BLK|BLOCK)\s*/,'').replace(/\s+/g,'');
+    if(_locChipCtx.blocks.includes(_lcRaw)){
+      vdbgLog('LOC CHIP: block '+_lcRaw+' on '+_locChipCtx.street,'var(--g)');
+      workingCtx.blockCtx=_lcRaw;
+      workingCtx.streetCtx=_locChipCtx.street;
+      speak('Searching Block '+_lcRaw+', sir.');
+      const _lcTown=_locData?_locData.street:(_STREET_TOWN_IDX.get(_locChipCtx.street)||'');
+      await handleBlockDetail(_lcRaw,_locChipCtx.street,_lcTown,{block:_lcRaw,street:_locChipCtx.street,town:_lcTown,floor:null});
+      loading=false;sbEl.disabled=false;return;
+    }
+    // Also match spoken digits e.g. "four eight seven" for block 487
+    const _spokenDigits=raw.trim().toLowerCase()
+      .replace(/four\s*eight\s*seven/g,'487')
+      .replace(/four\s*eight\s*five/g,'485')
+      .replace(/four\s*eight\s*six/g,'486')
+      .replace(/four\s*eight\s*eight/g,'488')
+      .replace(/four\s*eight\s*nine/g,'489')
+      .replace(/four\s*nine\s*zero/g,'490')
+      .replace(/one\s+(\w+)\s+(\w+)/g,(m,a,b)=>{
+        const d={'zero':'0','one':'1','two':'2','three':'3','four':'4','five':'5','six':'6','seven':'7','eight':'8','nine':'9'};
+        return (d['one']||'1')+(d[a]||a)+(d[b]||b);
+      });
+    const _spokenMatch=_spokenDigits.match(/(\d+[a-z]?)/i);
+    if(_spokenMatch){
+      const _spBlk=_spokenMatch[1].toUpperCase();
+      if(_locChipCtx.blocks.includes(_spBlk)){
+        vdbgLog('LOC CHIP: spoken block '+_spBlk+' on '+_locChipCtx.street,'var(--g)');
+        workingCtx.blockCtx=_spBlk;
+        workingCtx.streetCtx=_locChipCtx.street;
+        speak('Searching Block '+_spBlk+', sir.');
+        const _lcTown2=_locData?_locData.street:(_STREET_TOWN_IDX.get(_locChipCtx.street)||'');
+        await handleBlockDetail(_spBlk,_locChipCtx.street,_lcTown2,{block:_spBlk,street:_locChipCtx.street,town:_lcTown2,floor:null});
+        loading=false;sbEl.disabled=false;return;
+      }
+    }
+  }
+
   // ── LOC buffer + expand commands — before intent detection ──
   const _bufVoiceMatch=raw.match(/^(?:try\s+|use\s+|set\s+(?:to\s+)?|radius\s+)?(50|100|200|500)\s*m(?:etres?|eters?)?$/i);
   if(raw==='__loc_buf_50__'||raw==='__loc_buf_100__'||raw==='__loc_buf_200__'||raw==='__loc_buf_300__'||raw==='__loc_buf_400__'||raw==='__loc_buf_500__'||_bufVoiceMatch){
@@ -5833,7 +6132,12 @@ async function _handleInputInner(raw){
     _locBuffer=_bufVoiceMatch?Number(_bufVoiceMatch[1]):(_bMap[raw]||_locBuffer);
     harveyMsg('Search radius set to <strong>'+_locBuffer+'m</strong>, sir. Relocating...',[{label:'⊗ ABORT',val:'__loc_abort__'}]);
     speak('Radius set to '+_locBuffer+' metres. Relocating.');
-    _locTap();loading=false;sbEl.disabled=false;return;
+    // Clean up map and reset state before re-running
+    _locDestroyMap();
+    _locState='idle';
+    // Let harveyMsg render before firing _locTap
+    setTimeout(()=>_locTap(),200);
+    loading=false;sbEl.disabled=false;return;
   }
   if(raw==='__loc_adjust__'){
     harveyMsg('Adjust search radius, sir — tap to change:',
@@ -5848,6 +6152,23 @@ async function _handleInputInner(raw){
        {label:'400m',val:'__loc_buf_400__'},
        {label:'500m (MAX)',val:'__loc_buf_500__'},
        {label:'↩ BACK',val:'__loc_adjust__'}]);
+    loading=false;sbEl.disabled=false;return;
+  }
+
+  // ── PROXIMITY MAP — block level only, before intent detection ──
+  if(/^(proximity|proximity search|proximity details|nearby|whats nearby|show map|4km|4 km)$/i.test(raw.trim())){
+    const _pb=workingCtx.blockCtx||convCtx.block||null;
+    const _ps=workingCtx.streetCtx||convCtx.street||null;
+    if(_pb&&_ps){
+      // Stamp a unique anchor on a new Harvey message, then attach map to it
+      const _pAnchorId='prox-anchor-'+Date.now();
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view for Block <strong>${_pb}</strong> on <strong>${_ps}</strong> — 4km radius shown on map, sir.`);
+      speak('Proximity map for Block '+_pb+', sir. Tap show map to expand.');
+      // Small delay for DOM paint then attach
+      setTimeout(()=>_proxShowMap(_pb,_ps,_pAnchorId),600);
+    } else {
+      harveyMsg('Proximity view is available at block level, sir. Please search for a specific block first — for example: <em>block 602 clementi west street 1</em>');
+    }
     loading=false;sbEl.disabled=false;return;
   }
 
@@ -15401,6 +15722,7 @@ async function handleBlockDetail(block, street, town, ctx){
     ...(_streetsForBlock.length>1?[{label:'OTHER STREETS',val:`__otherstreets__|block:${_b}|town:${_t||''}`}]:[]),
     {label:'ESTIMATE VALUATION',val:'estimate value'},
     {label:'ℹ HDB INFO',val:`__hdbinfo__|block:${_b}|street:${_s}`},
+          {label:'🗺 PROXIMITY',val:'proximity'},
     _changeDetailsChip({block:_b,street:_s,town:_t},_s,_b,null,null),
   ];
 
@@ -15594,6 +15916,7 @@ function _locSetState(state){
 
 function _locAbort(){
   if(_locGeoWatcher!==null){navigator.geolocation.clearWatch(_locGeoWatcher);_locGeoWatcher=null;}
+  _locDestroyMap();
   _locSetState('idle');
   harveyMsg('Location acquisition cancelled, sir. Ready when you are.',[{label:'📍 TRY AGAIN',val:'__loc_start__'}]);
   speak('Location acquisition cancelled, sir.');
@@ -15603,6 +15926,8 @@ function _locAbort(){
 async function _locTap(){
   if(_locState==='acquiring'){_locAbort();return;}
   if(!navigator.geolocation){harveyMsg('Geolocation is not supported on this browser, sir.');return;}
+  // Always destroy any existing map before starting fresh
+  _locDestroyMap();
   if(!ONEMAP_TOKEN){
     harveyMsg('Location service is currently unavailable, sir. The OneMap token has not been loaded — please try reloading the page, or the token may need refreshing.');
     return;
@@ -15668,6 +15993,10 @@ async function _locTap(){
         _locData={street:_primary.street,block:_primary.block,blocks:_primary.hdbBlocks,lat:geo.lat,lng:geo.lng,source:geo.source};
         workingCtx.streetCtx=_primary.street;
         if(_primary.block) workingCtx.blockCtx=_primary.block;
+        // Stamp chip context — user can respond with bare block numbers for 2min
+        _locChipCtx={street:_primary.street,blocks:_showBlks,ts:Date.now()};
+        // Show map after chips render
+        setTimeout(()=>_locShowMap(geo.lat,geo.lng,_showBlks,_primary.street),900);
 
         let _locMsg='Location confirmed, sir.<br>';
         if(_allAddr.length) _locMsg+='Nearest address: <strong>'+_allAddr[0]+'</strong><br>';
@@ -15707,6 +16036,8 @@ async function _locTap(){
         ];
         harveyMsg(_noHdbMsg,_noHdbChips);
         speak('Location acquired, sir, but no HDB blocks found within '+_bufM+' metres. You may not be near an HDB precinct.');
+        // Show map even with no HDB — user can still see where they are
+        setTimeout(()=>_locShowMap(geo.lat,geo.lng,[],null),900);
       }
       mode='menu';loading=false;sbEl.disabled=false;
     },
