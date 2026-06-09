@@ -6548,8 +6548,9 @@ async function _handleInputInner(raw){
     const _locBlock=_locData?(_locData.block||''):null;
     const _locStreet=_locData?(_locData.street||''):null;
 
-    // CASE 1: loc fresh AND last searched block is different → ask user
-    if(_LOC_FRESH&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
+    // CASE 1: loc fresh AND HDB loc AND different block searched → ask user
+    // If private location (no street), skip conflict and fall through to Case 2
+    if(_LOC_FRESH&&_locStreet&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
       harveyMsg(`Two locations in context, sir. Which would you like to use for the proximity search?`,[
         {label:'📍 MY LOCATION — '+(_locBlock?'Blk '+_locBlock+' ':'')+(_locStreet||'current GPS'),val:'__prox_use_loc__'},
         {label:'🔍 LAST SEARCHED — Blk '+_pb+' '+(_ps||''),val:'__prox_use_ctx__'}
@@ -6558,11 +6559,12 @@ async function _handleInputInner(raw){
     }
 
     // CASE 2: loc fresh, same block or no ctx conflict → use loc directly
-    if(_LOC_FRESH&&_locStreet){
+    if(_LOC_FRESH&&_locData&&_locData.lat&&_locData.lng){
       const _pAnchorId='prox-anchor-'+Date.now();
       const _dispBlock=_locBlock||'';
-      const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+_locStreet;
-      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity view from your location — <strong>${_dispAddr}</strong> — 4km radius shown on map, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
+      const _dispAddr=(_dispBlock?'Blk '+_dispBlock+' ':'')+(_locStreet||'your current location');
+      const _isPrivateLoc=!_locStreet||_locData.isPrivate;
+      harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>${_isPrivateLoc?' <span style="font-size:9px;color:var(--t2)">(private area)</span>':''} — 4km radius, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
       speak('Proximity map from your location, sir. Tap show map to expand.');
       // Use actual GPS coords directly — no second OneMap lookup needed
       if(_locData.lat&&_locData.lng){
