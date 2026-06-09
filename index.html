@@ -6548,9 +6548,9 @@ async function _handleInputInner(raw){
     const _locBlock=_locData?(_locData.block||''):null;
     const _locStreet=_locData?(_locData.street||''):null;
 
-    // CASE 1: loc fresh AND HDB loc AND different block searched → ask user
-    // If private location (no street), skip conflict and fall through to Case 2
-    if(_LOC_FRESH&&_locStreet&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
+    // CASE 1: loc fresh AND confirmed HDB location AND different block searched → ask user
+    // Skip entirely if private location — always use GPS directly
+    if(_LOC_FRESH&&!_locData.isPrivate&&_locStreet&&_pb&&_ps&&(_locBlock!==_pb||_locStreet!==_ps)){
       harveyMsg(`Two locations in context, sir. Which would you like to use for the proximity search?`,[
         {label:'📍 MY LOCATION — '+(_locBlock?'Blk '+_locBlock+' ':'')+(_locStreet||'current GPS'),val:'__prox_use_loc__'},
         {label:'🔍 LAST SEARCHED — Blk '+_pb+' '+(_ps||''),val:'__prox_use_ctx__'}
@@ -6566,12 +6566,8 @@ async function _handleInputInner(raw){
       const _isPrivateLoc=!_locStreet||_locData.isPrivate;
       harveyMsg(`<span id="${_pAnchorId}"></span>Proximity from your location — <strong>${_dispAddr}</strong>${_isPrivateLoc?' <span style="font-size:9px;color:var(--t2)">(private area)</span>':''} — 4km radius, sir.<br><span style="font-size:9px;color:var(--t2)">Tap ◎ CHECK DISTANCE to compare two locations, or say <em>check distance</em>.</span>`);
       speak('Proximity map from your location, sir. Tap show map to expand.');
-      // Use actual GPS coords directly — no second OneMap lookup needed
-      if(_locData.lat&&_locData.lng){
-        setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'prox-anchor-'+Date.now().toString().slice(-6),_pAnchorId),600);
-      } else {
-        setTimeout(()=>_proxShowMap(_locBlock,_locStreet,_pAnchorId),600);
-      }
+      // Use GPS coords directly — no second OneMap lookup needed
+      setTimeout(()=>_proxShowMapCoords(_locData.lat,_locData.lng,_dispBlock,_locStreet,'',_pAnchorId),600);
       loading=false;sbEl.disabled=false;return;
     }
 
