@@ -5016,6 +5016,24 @@ function _proxVerdict(loc1,loc2,distKm){
   ]);
 }
 
+// Global block coordinate resolver — used by both _proxShowMap and _proxResolveAddress
+async function _getBlockCoords(blk,st){
+  const _h={'Authorization':ONEMAP_TOKEN};
+  // Attempt 1: BLK prefix
+  try{
+    const _r1=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent('BLK '+blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
+    vdbgLog('PROX SEARCH: HTTP '+_r1.status+' (BLK prefix)','var(--c)');
+    if(_r1.ok){const _d=await _r1.json();if(_d.results&&_d.results.length){vdbgLog('PROX SEARCH: hit='+JSON.stringify(_d.results[0]).slice(0,80),'var(--g)');return{lat:parseFloat(_d.results[0].LATITUDE),lng:parseFloat(_d.results[0].LONGITUDE)};}}
+  }catch(e){vdbgLog('PROX SEARCH err1: '+e.message,'var(--r)');}
+  // Attempt 2: no BLK prefix
+  try{
+    const _r2=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
+    vdbgLog('PROX SEARCH: HTTP '+_r2.status+' (no BLK)','var(--c)');
+    if(_r2.ok){const _d=await _r2.json();if(_d.results&&_d.results.length){vdbgLog('PROX SEARCH: hit='+JSON.stringify(_d.results[0]).slice(0,80),'var(--g)');return{lat:parseFloat(_d.results[0].LATITUDE),lng:parseFloat(_d.results[0].LONGITUDE)};}}
+  }catch(e){vdbgLog('PROX SEARCH err2: '+e.message,'var(--r)');}
+  return null;
+}
+
 function _proxShowMap(block, street, anchorId){
   // anchorId is stamped on the Harvey message at render time — reliable anchor
   function _doAttach(){
@@ -5063,23 +5081,6 @@ function _proxShowMap(block, street, anchorId){
           if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
           // Get block coordinates from OneMap search
           const _q=encodeURIComponent('BLK '+block+' '+street);
-          // Resolve block coordinates — try with BLK prefix first, then without
-          async function _getBlockCoords(blk,st){
-            const _headers={'Authorization':ONEMAP_TOKEN};
-            // Attempt 1: BLK prefix
-            try{
-              const _r1=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent('BLK '+blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_headers});
-              vdbgLog('PROX SEARCH: HTTP '+_r1.status+' (with BLK)','var(--c)');
-              if(_r1.ok){const _d1=await _r1.json();if(_d1.results&&_d1.results.length){vdbgLog('PROX SEARCH: hit — '+JSON.stringify(_d1.results[0]).slice(0,80),'var(--g)');return {lat:parseFloat(_d1.results[0].LATITUDE),lng:parseFloat(_d1.results[0].LONGITUDE)};}}
-            }catch(e){vdbgLog('PROX SEARCH attempt 1 err: '+e.message,'var(--r)');}
-            // Attempt 2: without BLK prefix
-            try{
-              const _r2=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_headers});
-              vdbgLog('PROX SEARCH: HTTP '+_r2.status+' (no BLK)','var(--c)');
-              if(_r2.ok){const _d2=await _r2.json();if(_d2.results&&_d2.results.length){vdbgLog('PROX SEARCH: hit — '+JSON.stringify(_d2.results[0]).slice(0,80),'var(--g)');return {lat:parseFloat(_d2.results[0].LATITUDE),lng:parseFloat(_d2.results[0].LONGITUDE)};}}
-            }catch(e){vdbgLog('PROX SEARCH attempt 2 err: '+e.message,'var(--r)');}
-            return null;
-          }
           _getBlockCoords(block,street).then(coords=>{
             let lat=coords?coords.lat:null, lng=coords?coords.lng:null;
             // Fallback to last GPS coords
