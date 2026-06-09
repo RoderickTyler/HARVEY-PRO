@@ -897,6 +897,7 @@ let _locMapLoaded=false; // Leaflet script loaded flag
 let _locMapEl=null;      // map container element id
 let _proxMap=null;       // Leaflet map instance (proximity)
 let _proxLoc1=null;      // {lat,lng,label} for distance checker loc 1
+let _proxDistLayers=[];  // Leaflet layers added by distance checker (pins + line)
 let _proxLoc2=null;      // {lat,lng,label} for distance checker loc 2
 let _proxAwaitingLoc=0;  // 0=idle, 1=waiting loc1, 2=waiting loc2 (for voice/text option B)
 let _proxMapId=null;     // current prox map div id (for adding pins) // street + valid blocks from last location result // metres — user adjustable 50-500
@@ -4922,7 +4923,13 @@ async function _proxResolveAddress(postal,block,street){
   async function _omSearch(q){
     try{
       const _r=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(q)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
-      if(_r.ok){const _d=await _r.json();if(_d.results&&_d.results.length){const _res=_d.results[0];const lat=parseFloat(_res.LATITUDE),lng=parseFloat(_res.LONGITUDE);if(!isNaN(lat)&&!isNaN(lng))return{lat,lng,label:_res.ADDRESS||q,searchval:_res.SEARCHVAL||''};}}
+      if(_r.ok){
+        const _d=await _r.json();
+        if(_d.results&&_d.results.length){
+          const _c=_parseOMCoords(_d.results[0]);
+          if(_c) return{lat:_c.lat,lng:_c.lng,label:_d.results[0].ADDRESS||_d.results[0].SEARCHVAL||q};
+        }
+      }
     }catch(e){}
     return null;
   }
@@ -4966,6 +4973,12 @@ async function _proxResolveAddress(postal,block,street){
   return null;
 }
 
+// Clear previous distance checker pins and line from map
+function _proxClearDistLayers(){
+  _proxDistLayers.forEach(l=>{try{if(_proxMap)_proxMap.removeLayer(l);}catch(e){}});
+  _proxDistLayers=[];
+}
+
 // Add a coloured pin to the existing prox map
 function _proxAddPin(lat,lng,label,color,num){
   if(!_proxMap) return;
@@ -4973,15 +4986,17 @@ function _proxAddPin(lat,lng,label,color,num){
     html:'<div style="width:14px;height:14px;border-radius:50%;background:'+color+';border:2px solid #fff;box-shadow:0 0 6px '+color+';display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:7px;color:#000;font-weight:bold">'+num+'</div>',
     className:'',iconAnchor:[7,7]
   });
-  L.marker([lat,lng],{icon,zIndexOffset:900})
+  const _m=L.marker([lat,lng],{icon,zIndexOffset:900})
     .addTo(_proxMap)
     .bindPopup('<span style="font-family:var(--mono);font-size:10px">'+label+'</span>');
+  _proxDistLayers.push(_m);
 }
 
 // Draw line between two pins on prox map
 function _proxDrawLine(lat1,lng1,lat2,lng2){
   if(!_proxMap) return;
-  L.polyline([[lat1,lng1],[lat2,lng2]],{color:'rgba(255,200,0,0.7)',weight:2,dashArray:'6,4'}).addTo(_proxMap);
+  const _l=L.polyline([[lat1,lng1],[lat2,lng2]],{color:'rgba(255,200,0,0.7)',weight:2,dashArray:'6,4'}).addTo(_proxMap);
+  _proxDistLayers.push(_l);
 }
 
 // Harvey distance verdict — 3 variants per scenario
@@ -5017,21 +5032,34 @@ function _proxVerdict(loc1,loc2,distKm){
 }
 
 // Global block coordinate resolver — used by both _proxShowMap and _proxResolveAddress
+function _parseOMCoords(res){
+  // Extract WGS84 coords from OneMap result — validate Singapore range
+  // OneMap returns LATITUDE/LONGITUDE (WGS84) AND X/Y (SVY21 in metres)
+  // Must validate: Singapore WGS84 is lat 1.1–1.5, lng 103.5–104.1
+  const lat=parseFloat(res.LATITUDE||res.latitude||res.LAT||'');
+  const lng=parseFloat(res.LONGITUDE||res.longitude||res.LNG||'');
+  const valid=!isNaN(lat)&&!isNaN(lng)&&lat>1.1&&lat<1.5&&lng>103.5&&lng<104.1;
+  vdbgLog('PROX COORDS: lat='+lat+' lng='+lng+' valid='+valid,'var(--c)');
+  return valid?{lat,lng}:null;
+}
+
 async function _getBlockCoords(blk,st){
   const _h={'Authorization':ONEMAP_TOKEN};
-  // Attempt 1: BLK prefix
-  try{
-    const _r1=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent('BLK '+blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
-    vdbgLog('PROX SEARCH: HTTP '+_r1.status+' (BLK prefix)','var(--c)');
-    if(_r1.ok){const _d=await _r1.json();if(_d.results&&_d.results.length){vdbgLog('PROX SEARCH: hit='+JSON.stringify(_d.results[0]).slice(0,80),'var(--g)');return{lat:parseFloat(_d.results[0].LATITUDE),lng:parseFloat(_d.results[0].LONGITUDE)};}}
-  }catch(e){vdbgLog('PROX SEARCH err1: '+e.message,'var(--r)');}
-  // Attempt 2: no BLK prefix
-  try{
-    const _r2=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(blk+' '+st)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
-    vdbgLog('PROX SEARCH: HTTP '+_r2.status+' (no BLK)','var(--c)');
-    if(_r2.ok){const _d=await _r2.json();if(_d.results&&_d.results.length){vdbgLog('PROX SEARCH: hit='+JSON.stringify(_d.results[0]).slice(0,80),'var(--g)');return{lat:parseFloat(_d.results[0].LATITUDE),lng:parseFloat(_d.results[0].LONGITUDE)};}}
-  }catch(e){vdbgLog('PROX SEARCH err2: '+e.message,'var(--r)');}
-  return null;
+  async function _omFetch(q){
+    try{
+      const _r=await fetch('https://www.onemap.gov.sg/api/common/elastic/search?searchVal='+encodeURIComponent(q)+'&returnGeom=Y&getAddrDetails=N&pageNum=1',{headers:_h});
+      vdbgLog('PROX SEARCH: HTTP '+_r.status+' q='+q,'var(--c)');
+      if(_r.ok){
+        const _d=await _r.json();
+        if(_d.results&&_d.results.length){
+          vdbgLog('PROX SEARCH: result='+JSON.stringify(_d.results[0]).slice(0,120),'var(--g)');
+          return _parseOMCoords(_d.results[0]);
+        }
+      }
+    }catch(e){vdbgLog('PROX SEARCH err: '+e.message,'var(--r)');}
+    return null;
+  }
+  return (await _omFetch('BLK '+blk+' '+st))||(await _omFetch(blk+' '+st));
 }
 
 function _proxShowMap(block, street, anchorId){
@@ -5073,12 +5101,12 @@ function _proxShowMap(block, street, anchorId){
       if(visible){
         mapDiv.style.display='none';
         toggle.textContent='🗺 SHOW MAP';
-        if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+        _proxClearDistLayers();if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
       } else {
         mapDiv.style.display='block';
         toggle.textContent='🗺 HIDE MAP';
         _locLoadLeaflet(()=>{
-          if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
+          _proxClearDistLayers();if(_proxMap){try{_proxMap.remove();}catch(e){} _proxMap=null;}
           // Get block coordinates from OneMap search
           const _q=encodeURIComponent('BLK '+block+' '+street);
           _getBlockCoords(block,street).then(coords=>{
@@ -5213,6 +5241,7 @@ function proxAutoFill(distId,num){
 async function proxCheck(distId){
   const _res=document.getElementById(distId+'-result');
   if(_res) _res.innerHTML='<span style="color:var(--t2)">Resolving addresses, sir...</span>';
+  _proxClearDistLayers(); // clear previous pins+line before new check
   try{
   const p1=document.getElementById(distId+'-p1')?.value.trim();
   const b1=document.getElementById(distId+'-b1')?.value.trim();
